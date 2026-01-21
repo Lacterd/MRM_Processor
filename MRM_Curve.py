@@ -86,17 +86,24 @@ class MRMProcessorUI(QWidget):
         """设置初始均分宽度"""
         table_width = self.TextBrowser_SampleSelect.width()
         if table_width > 0:
-            column_width = table_width // 4
+            column_width = table_width // 3
             self.TextBrowser_SampleSelect.setColumnWidth(0, column_width)
             self.TextBrowser_SampleSelect.setColumnWidth(1, column_width)
             self.TextBrowser_SampleSelect.setColumnWidth(2, column_width)
-            self.TextBrowser_SampleSelect.setColumnWidth(3, column_width)
+            #self.TextBrowser_SampleSelect.setColumnWidth(3, column_width)
         else:
             # 如果宽度为0，重试一次
             QTimer.singleShot(50, self.set_initial_equal_width)
             
-    def CloseEvent(self,event):
-        os._exit(0)
+    def closeEvent(self,event):
+        try:
+            if hasattr(self, "worker") and self.worker is not None and self.worker.isRunning():
+                self.worker.request_stop()      # 你要在 MRMWorker 里实现
+                self.worker.wait(3000)          # 最多等 3 秒（你可调大）
+        except Exception as e:
+            print("close cleanup error:", e)
+        event.accept()
+        QtWidgets.QApplication.quit()
         
     def initUI(self):
         globallayout = QVBoxLayout()
@@ -106,11 +113,13 @@ class MRMProcessorUI(QWidget):
         # Union
         self.Label_SampleSelect = QLabel('Select data')
         self.Label_Target_Select = QLabel('Select Target List')
-        self.Label_Params_Select = QLabel('Set params')
+        self.Label_Manual_Select = QLabel('Select Manual List')
+        self.Label_Params_Select = QLabel('Peak picking params')
+        self.Label_Curve = QLabel('Curve params')
         # 设置表头行为
         self.TextBrowser_SampleSelect = QTableWidget()
-        self.TextBrowser_SampleSelect.setColumnCount(4)
-        self.TextBrowser_SampleSelect.setHorizontalHeaderLabels(['Name','Type','Dilution Factor','Manual List'])
+        self.TextBrowser_SampleSelect.setColumnCount(3)
+        self.TextBrowser_SampleSelect.setHorizontalHeaderLabels(['Name','Type','Concentration'])
         header = self.TextBrowser_SampleSelect.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)  # 允许用户调整
         header.setStretchLastSection(False)  # 禁用最后一列特殊拉伸
@@ -121,19 +130,31 @@ class MRMProcessorUI(QWidget):
         #self.TextBrowser_SampleSelect.horizontalHeader().setStretchLastSection(True)
         self.PushButton_SampleSelect = QPushButton('Select')
         self.PushButton_Target_Select = QPushButton('Select')
-        self.TextBrowser_Target_Select = QLabel('*')
+        self.TextBrowser_Target_Select = QLabel('')
         self.PushButton_SampleSelect.setToolTip('Select sample *.mzML documents')
-        self.PushButton_Target_Select.setToolTip('Select Target List *.xlsx document')
+        self.PushButton_Target_Select.setToolTip('Select target list *.xlsx document')
+        self.TextBrowser_Manual_Select = QLabel('')
+        self.PushButton_Manual_Select = QPushButton('Select')
+        self.PushButton_Manual_Select.setToolTip('Select manual list *.xlsx document')
+        self.PushButton_Manual_Reset = QPushButton('Reset')
+        self.PushButton_Manual_Reset.setToolTip('Reset manual list')
+        self.ManualListPath = ''
         # Slot
         self.PushButton_SampleSelect.clicked.connect(self.SelectSampleFile)
         self.PushButton_Target_Select.clicked.connect(self.SelectTargetFile)
+        self.PushButton_Manual_Select.clicked.connect(self.SelectManualFile)
+        self.PushButton_Manual_Reset.clicked.connect(self.ResetManualFile)
         
         Data_import_Layout.addWidget(self.Label_SampleSelect,1,0)
         Data_import_Layout.addWidget(self.TextBrowser_SampleSelect, 2, 0) # row 1， column 0
-        Data_import_Layout.addWidget(self.PushButton_SampleSelect, 2, 1) # row 1， column 1
+        Data_import_Layout.addWidget(self.PushButton_SampleSelect, 2, 2) # row 1， column 1
         Data_import_Layout.addWidget(self.Label_Target_Select,5,0)
         Data_import_Layout.addWidget(self.TextBrowser_Target_Select, 6, 0)
         Data_import_Layout.addWidget(self.PushButton_Target_Select, 6, 1) # 行，列，行高，列宽
+        Data_import_Layout.addWidget(self.Label_Manual_Select,7,0)
+        Data_import_Layout.addWidget(self.TextBrowser_Manual_Select,8,0)
+        Data_import_Layout.addWidget(self.PushButton_Manual_Select,8,1)
+        Data_import_Layout.addWidget(self.PushButton_Manual_Reset,8,2)
         Data_import_Widget.setLayout(Data_import_Layout)
         
         # Params setting
@@ -169,6 +190,26 @@ class MRMProcessorUI(QWidget):
         Params_setting_Layout.addWidget(self.Lable_SingleData,2,4)
         Params_setting_Layout.addWidget(self.Combox_Export,2,5)
         Params_setting_Widget.setLayout(Params_setting_Layout)
+        
+        # Curve setting
+        Curve_setting_Widget = QWidget()
+        Cueve_setting_Layout = QGridLayout()
+        self.Lable_R2_Tor = QLabel('R²')
+        self.Lable_RE_Tor = QLabel('Relative Error(%)')
+        self.Lable_Curve_Weight = QLabel('Weighting factor')
+        self.LineEdit_R2_Tor = QLineEdit('0.99')
+        self.LineEdit_RE_Tor = QLineEdit('20')
+        self.Combox_Weight = QComboBox()
+        self.Combox_Weight.addItems(['1','1/x','1/x²'])
+        self.Combox_Weight.setCurrentText('1')
+        Cueve_setting_Layout.addWidget(self.Label_Curve,0,0)
+        Cueve_setting_Layout.addWidget(self.Lable_R2_Tor,1,0)
+        Cueve_setting_Layout.addWidget(self.LineEdit_R2_Tor,1,1)
+        Cueve_setting_Layout.addWidget(self.Lable_RE_Tor,1,2)
+        Cueve_setting_Layout.addWidget(self.LineEdit_RE_Tor,1,3)
+        Cueve_setting_Layout.addWidget(self.Lable_Curve_Weight,1,4)
+        Cueve_setting_Layout.addWidget(self.Combox_Weight,1,5)
+        Curve_setting_Widget.setLayout(Cueve_setting_Layout)
         
         # Run button
         Run_button_Widget = QWidget()
@@ -207,6 +248,7 @@ class MRMProcessorUI(QWidget):
         # Global Layout setting
         globallayout.addWidget(Data_import_Widget)
         globallayout.addWidget(Params_setting_Widget)
+        globallayout.addWidget(Curve_setting_Widget)
         globallayout.addWidget(Run_button_Widget)
         globallayout.addWidget(StatusBar_Widget)
         self.setLayout(globallayout)
@@ -221,27 +263,38 @@ class MRMProcessorUI(QWidget):
                 Combox_Type.addItems(['STD','Blank'])
                 Combox_Type.setCurrentText('STD')
                 Combox_Type.currentIndexChanged.connect(self.SampleTypeChange)
-                LineEdit_Dilution= QLineEdit('')
-                LineEdit_Manual= QLineEdit('')
+                LineEdit_Concentration = QLineEdit('')
                 name_begin = i.rfind('/')
                 if name_begin == -1:
                     name_begin = i.rfind('\\')
                 name_end = len(i)
-                self.Data_params[i[name_begin+1:name_end-5]] = {'Name':i[name_begin+1:name_end-5],'Path':i,'Type':'STD','Group':1,'Index':'','Combox':Combox_Type,'LineEdit_Dilution':LineEdit_Dilution,'LineEdit_Manual':LineEdit_Manual,'rowCount':self.TextBrowser_SampleSelect.rowCount()}
+                self.Data_params[i[name_begin+1:name_end-5]] = {'Name':i[name_begin+1:name_end-5],'Path':i,'Type':'STD','Group':1,'Index':'','Combox':Combox_Type,'LineEdit_Concentration':LineEdit_Concentration,'rowCount':self.TextBrowser_SampleSelect.rowCount()}
                 self.TextBrowser_SampleSelect.insertRow(self.TextBrowser_SampleSelect.rowCount())
                 self.TextBrowser_SampleSelect.setItem(self.TextBrowser_SampleSelect.rowCount()-1,0,QTableWidgetItem(i[name_begin+1:name_end-5]))
                 self.TextBrowser_SampleSelect.setCellWidget(self.TextBrowser_SampleSelect.rowCount()-1,1,self.Data_params[i[name_begin+1:name_end-5]]['Combox'])
-                self.TextBrowser_SampleSelect.setCellWidget(self.TextBrowser_SampleSelect.rowCount()-1,2,self.Data_params[i[name_begin+1:name_end-5]]['LineEdit_Dilution'])
-                self.TextBrowser_SampleSelect.setCellWidget(self.TextBrowser_SampleSelect.rowCount()-1,3,self.Data_params[i[name_begin+1:name_end-5]]['LineEdit_Manual'])
+                self.TextBrowser_SampleSelect.setCellWidget(self.TextBrowser_SampleSelect.rowCount()-1,2,self.Data_params[i[name_begin+1:name_end-5]]['LineEdit_Concentration'])
         
     def SelectTargetFile(self):
-        FileName,FileType = QFileDialog.getOpenFileName(self,"选取文件",os.getcwd(),"Excel Files(*.xlsx)")
+        FileName,FileType = QFileDialog.getOpenFileName(self,"Select",os.getcwd(),"Excel Files(*.xlsx)")
         name_begin = FileName.rfind('/')
         if name_begin == -1:
             name_begin = FileName.rfind('\\')
         name_end = len(FileName)
         self.TextBrowser_Target_Select.setText(FileName[name_begin+1:name_end])
         self.TargetPath = FileName
+        
+    def SelectManualFile(self):
+        FileName,FileType = QFileDialog.getOpenFileName(self,"Select",os.getcwd(),"Excel Files(*.xlsx)")
+        name_begin = FileName.rfind('/')
+        if name_begin == -1:
+            name_begin = FileName.rfind('\\')
+        name_end = len(FileName)
+        self.TextBrowser_Manual_Select.setText(FileName[name_begin+1:name_end])
+        self.ManualListPath = FileName
+    
+    def ResetManualFile(self):
+        self.TextBrowser_Manual_Select.setText('')
+        self.ManualListPath = ''
     
     def SampleTypeChange(self):
         for i in self.Data_params.keys():
@@ -273,6 +326,8 @@ class MRMProcessorUI(QWidget):
         self.All_Data_Area_IS_1 = self.All_Data_Area_1.copy()
         self.All_Data_Area_IS_2 = self.All_Data_Area_1.copy()
         self.All_Data_Time = self.All_Data_Area_1.copy()
+        self.All_Data_Manual = pd.read_excel(self.TargetPath)
+        self.All_Data_Manual = self.All_Data_Manual.loc[:,['Identity keys','Polarity','IS','1_Q1','1_Q3']]
         for i in self.Data_params.keys():
             self.Data_params[i]['TargetList'] = self.pool_result[i][0].copy()
             self.Data_params[i]['Calibrant'] = self.pool_result[i][1].copy()
@@ -281,105 +336,317 @@ class MRMProcessorUI(QWidget):
             self.All_Data_Area_IS_1[i] = self.Data_params[i]['TargetList'].loc[:, 'Area_1/IS']
             self.All_Data_Area_IS_2[i] = self.Data_params[i]['TargetList'].loc[:, 'Area_2/IS']
             self.All_Data_Time[i] = self.Data_params[i]['TargetList'].loc[:, 'RT_1']
+            self.All_Data_Manual[i+'-L'] = ''
+            self.All_Data_Manual[i+'-R'] = ''
+            for ii in range(len(self.Data_params[i]['TargetList'])):
+                if type(self.Data_params[i]['TargetList'].loc[ii,'Edge_left_1']) != str and self.Data_params[i]['TargetList'].loc[ii,'Edge_left_1'] > 0:
+                    Name_Match = [x for x in range(len(self.All_Data_Manual)) if self.All_Data_Manual.loc[x,'Identity keys'] == self.Data_params[i]['TargetList'].loc[ii,'Identity keys']][0]
+                    self.All_Data_Manual.loc[Name_Match,i+'-L'] = self.Data_params[i]['TargetList'].loc[ii,'Edge_left_1']
+                    self.All_Data_Manual.loc[Name_Match,i+'-R'] = self.Data_params[i]['TargetList'].loc[ii,'Edge_right_1']
+            for ii in range(len(self.Data_params[i]['Calibrant'])):
+                if type(self.Data_params[i]['Calibrant'].loc[ii,'Edge_left_1']) != str and self.Data_params[i]['Calibrant'].loc[ii,'Edge_left_1'] > 0:
+                    Name_Match = [x for x in range(len(self.All_Data_Manual)) if self.All_Data_Manual.loc[x,'Identity keys'] == self.Data_params[i]['Calibrant'].loc[ii,'Identity keys']][0]
+                    self.All_Data_Manual.loc[Name_Match,i+'-L'] = self.Data_params[i]['Calibrant'].loc[ii,'Edge_left_1']
+                    self.All_Data_Manual.loc[Name_Match,i+'-R'] = self.Data_params[i]['Calibrant'].loc[ii,'Edge_right_1']
         localtime = time.localtime()
         suffix = f"{localtime.tm_mon}{localtime.tm_mday}{localtime.tm_hour}{localtime.tm_min}"
         basepath = self.filepath_title
         self.All_Data_Area_1.to_excel(basepath + f'MRM_Area_1_{suffix}.xlsx', index=False)
-        self.All_Data_Area_2.to_excel(basepath + f'MRM_Area_2_{suffix}.xlsx', index=False)
         self.All_Data_Area_IS_1.to_excel(basepath + f'MRM_Area_IS_1_{suffix}.xlsx', index=False)
-        self.All_Data_Area_IS_2.to_excel(basepath + f'MRM_Area_IS_2_{suffix}.xlsx', index=False)
         self.All_Data_Time.to_excel(basepath + f'MRM_Time_{suffix}.xlsx', index=False)
-        Concentration = pd.read_excel(self.TargetPath)
-        Concentration = Concentration[Concentration['IS'].notna()]
-        Concentration = list(Concentration.loc[:,'Concentration'])
-        Dilution_List = []
+        if self.ManualListPath == '':
+            self.All_Data_Area_2.to_excel(basepath + f'MRM_Area_2_{suffix}.xlsx', index=False)
+            self.All_Data_Area_IS_2.to_excel(basepath + f'MRM_Area_IS_2_{suffix}.xlsx', index=False)
+            self.All_Data_Manual.to_excel(basepath + f'MRM_RT_range_{suffix}.xlsx', index=False)
+        Concentration = []
         STD_key = []
         Blank_key = []
         for i in self.Data_params.keys():
             if self.Data_params[i]['Type'] == 'STD':
-                Dilution_List.append(float(self.Data_params[i]['LineEdit_Dilution'].text()))
+                Concentration.append(float(self.Data_params[i]['LineEdit_Concentration'].text()))
                 STD_key.append(i)
             else:
                 Blank_key.append(i)
+        Concentration_set = list(set(Concentration))
+        Concentration_set.sort()
         results = {}
+        results_DF = pd.DataFrame(columns=['Name','slope','intercept','r2','RE','X_L','X_R'])
         for i in self.All_Data_Area_IS_1.index:
-            X = [Concentration[i]/Dilution_List[x] for x in range(len(Dilution_List))]
-            if len(Blank_key)>0:
-                Blank_mean = np.mean([x for x in list(self.All_Data_Area_IS_1.loc[i,Blank_key]) if type(x) in [int,float,np.float64,np.float32,np.float16]])
+            score = []
+            i_L = Concentration_set[0]
+            Warm_RE = ''
+            for i_R in Concentration_set[1:]:
+                X = []
+                Y = []
+                for ii in self.Data_params.keys():
+                    if type(self.All_Data_Area_IS_1.loc[i,ii]) != str and self.All_Data_Area_IS_1.loc[i,ii]>0:
+                        if i_L<=float(self.Data_params[ii]['LineEdit_Concentration'].text())<=i_R:
+                            X.append(float(self.Data_params[ii]['LineEdit_Concentration'].text()))
+                            Y.append(self.All_Data_Area_IS_1.loc[i,ii])
+                X_set = list(set(X)) 
+                X_set.sort()
+                if len(X_set) >= 3:
+                    Y_mean = []
+                    SD = []
+                    RSD = []
+                    X_set_temp = []
+                    for ii in X_set:
+                        if len([Y[x] for x in range(len(X)) if X[x]==ii]) == len([x for x in X if x == ii]):
+                            y = np.mean([Y[x] for x in range(len(X)) if X[x]==ii])
+                            Y_mean.append(y)
+                            y_SD = np.std([Y[x] for x in range(len(X)) if X[x]==ii])
+                            SD.append(y_SD)
+                            RSD.append(y_SD/y)
+                            X_set_temp.append(ii)
+                    X_set = [[x] for x in X_set_temp]
+                    Y_mean = [[x] for x in Y_mean]
+                    if self.Combox_Weight.currentText() == '1/x²':
+                        w = 1/(np.array(X_set).ravel()**2)
+                    elif self.Combox_Weight.currentText() == '1/x':
+                        w = 1/(np.array(X_set).ravel())
+                    else:
+                        w = np.array([1]*len(X_set))
+                    model = LinearRegression().fit(X_set, Y_mean, sample_weight=w)
+                    slope, intercept, r2 = model.coef_[0], model.intercept_, model.score(X_set, Y_mean)
+                    RE = [np.around(((Y_mean[x][0]-intercept[0])/slope[0]-X_set[x][0])/X_set[x][0],4) for x in range(len(X_set))]
+                    if r2 >= float(self.LineEdit_R2_Tor.text()) and max(abs(np.array(RE))) <= float(self.LineEdit_RE_Tor.text())/100:
+                        score.append((X_set[0],X_set[-1],X_set[-1][0]/X_set[0][0]))
+            if len(score) > 0:
+                X_all = []
+                Y_all = []
+                for ii in self.Data_params.keys():
+                    if type(self.All_Data_Area_IS_1.loc[i,ii]) != str and self.All_Data_Area_IS_1.loc[i,ii]>0:
+                        X_all.append(float(self.Data_params[ii]['LineEdit_Concentration'].text()))
+                        Y_all.append(self.All_Data_Area_IS_1.loc[i,ii])
+                X_all_set = list(set(X_all)) 
+                X_all_set.sort()
+                Y_all_mean = []
+                SD = []
+                RSD = []
+                X_all_set_temp = []
+                for ii in X_all_set:
+                    if len([Y_all[x] for x in range(len(X_all)) if X_all[x]==ii]) == len([x for x in X_all if x == ii]):
+                        y = np.mean([Y_all[x] for x in range(len(X_all)) if X_all[x]==ii])
+                        Y_all_mean.append(y)
+                        y_SD = np.std([Y_all[x] for x in range(len(X_all)) if X_all[x]==ii])
+                        SD.append(y_SD)
+                        RSD.append(y_SD/y)
+                        X_all_set_temp.append(ii)
+                X_all_set = X_all_set_temp
+                score_len = [x[2] for x in score]
+                score = [score[x] for x in range(len(score_len)) if score_len[x] == max(score_len)]
+                score_min = [x[0] for x in score]
+                score = [score[x] for x in range(len(score_min)) if score_min[x] == min(score_min)][0]
+                X = []
+                Y = []
+                for ii in self.Data_params.keys():
+                    if type(self.All_Data_Area_IS_1.loc[i,ii]) != str and self.All_Data_Area_IS_1.loc[i,ii]>0:
+                        if score[0][0]<=float(self.Data_params[ii]['LineEdit_Concentration'].text())<=score[1][0]:
+                            X.append(float(self.Data_params[ii]['LineEdit_Concentration'].text()))
+                            Y.append(self.All_Data_Area_IS_1.loc[i,ii])
+                X_set = list(set(X)) 
+                X_set.sort()
+                Y_all_mean_L = [Y_all_mean[x] for x in range(len(X_all_set)) if X_all_set[x] <= max(X_set)]
+                X_all_set_L = [X_all_set[x] for x in range(len(X_all_set)) if X_all_set[x] <= max(X_set)]
+                SD_L = [SD[x] for x in range(len(X_all_set)) if X_all_set[x] <= max(X_set)]
+                Y_all_mean_R = [Y_all_mean[x] for x in range(len(X_all_set)) if X_all_set[x] > max(X_set)]
+                X_all_set_R = [X_all_set[x] for x in range(len(X_all_set)) if X_all_set[x] > max(X_set)]
+                SD_R = [SD[x] for x in range(len(X_all_set)) if X_all_set[x] > max(X_set)]
+                X_all_set = [[x] for x in X_all_set]
+                Y_all_mean = [[x] for x in Y_all_mean]
+                Y_mean = []
+                X_set_temp = []
+                for ii in X_set:
+                    if len([Y[x] for x in range(len(X)) if X[x]==ii]) == len([x for x in X if x == ii]):
+                        y = np.mean([Y[x] for x in range(len(X)) if X[x]==ii])
+                        Y_mean.append(y)
+                        X_set_temp.append(ii)
+                X_set = [[x] for x in X_set_temp]
+                Y_mean = [[x] for x in Y_mean]
+                if self.Combox_Weight.currentText() == '1/x²':
+                    w = 1/(np.array(X_set).ravel()**2)
+                elif self.Combox_Weight.currentText() == '1/x':
+                    w = 1/(np.array(X_set).ravel())
+                else:
+                    w = np.array([1]*len(X_set))
+                model = LinearRegression().fit(X_set, Y_mean, sample_weight=w)
+                slope, intercept, r2 = model.coef_[0], model.intercept_, model.score(X_set, Y_mean)
+                RE = [((Y_mean[x][0]-intercept[0])/slope[0]-X_set[x][0])/X_set[x][0] for x in range(len(X_set))]
+                results[self.All_Data_Area_IS_1.loc[i,'Identity keys']] = {"slope": slope[0], "intercept": intercept[0], "r2": r2, 'RE':RE, 'X_set':X_set}
+                temp_DF = pd.DataFrame({"Name":self.All_Data_Area_IS_1.loc[i,'Identity keys'],"slope": slope[0], "intercept": intercept[0], "r2": r2, 'RE':[RE], 'X_L':X_set[0],'X_R':X_set[-1]})
+                results_DF = pd.concat([results_DF,temp_DF])
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x[0] for x in X_all_set],
+                        y=[x[0] for x in list(model.predict(X_all_set))],# 绑定额外数据
+                        mode='lines',
+                        name=self.All_Data_Area_IS_1.loc[i,'Identity keys'],
+                        line={'width':2,'color':'rgba(247,174,177,1)'},
+                        ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=X_all_set_L,
+                        y=Y_all_mean_L,# 绑定额外数据
+                        hovertemplate=(
+                        "Concentration: %{x}<br>"
+                        "Area/IS: %{y}<br>"
+                        "<extra></extra>"),
+                        mode='markers',
+                        name=self.All_Data_Area_IS_1.loc[i,'Identity keys']+' dot',
+                        legendgroup=self.All_Data_Area_IS_1.loc[i,'Identity keys']+' dot',
+                        showlegend=True,
+                        line={'width':2},
+                        marker=dict(
+                            size=5,
+                            color='rgba(247,174,177,0.7)',
+                            line=dict(width=1, color="black")
+                                ),
+                        error_y=dict(
+                            type='data',
+                            array=SD_L,      # 上下误差 = SD
+                            visible=True)
+                        ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=X_all_set_R,
+                        y=Y_all_mean_R,# 绑定额外数据
+                        hovertemplate=(
+                        "Concentration: %{x}<br>"
+                        "Area/IS: %{y}<br>"
+                        "<extra></extra>"),
+                        mode='markers',
+                        name=self.All_Data_Area_IS_1.loc[i,'Identity keys']+' dot',
+                        legendgroup=self.All_Data_Area_IS_1.loc[i,'Identity keys']+' dot',
+                        showlegend=False,
+                        line={'width':2},
+                        marker=dict(
+                            size=5,
+                            color='rgba(31, 119, 180,0.7)',
+                            line=dict(width=1, color="black")
+                                ),
+                        error_y=dict(
+                            type='data',
+                            array=SD_R,      # 上下误差 = SD
+                            visible=True)
+                        ))
+                fig.update_layout(
+                    legend={
+                        'xanchor': 'right',
+                        'x': 1.3,  # 改为 0.95，让图例在画布内部（95% 宽度处）
+                        'y': 0.5,   # 垂直居中
+                        'bgcolor': 'rgba(255,255,255,0.3)',  # 可选：添加半透明背景
+                    },
+                    #margin=dict(l=50, r=150, b=50, t=50, pad=4),
+                    autosize=False,
+                    width=700,
+                    height=600,
+                    title='Curve of '+self.All_Data_Area_IS_1.loc[i,'Identity keys'],
+                    titlefont={'size':20},
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis={'title':{'text':'Concentration','font':{'size':15},'standoff':0},
+                           'linecolor':'black',
+                           'tickfont':{'size':11},
+                           'ticks':'outside',
+                           'ticklen':2,
+                           # 添加range设置，在两端留出空白
+                           #'range':[-0.5, len(x_List)-0.5]  # 这里-0.5和+0.5表示两端各留出相当于半个类别的空白
+                           },
+                    yaxis={'title':{'text':'Peak area ratio','font':{'size':15},'standoff':0},
+                           'linecolor':'black',
+                           'tickfont':{'size':11},
+                           'ticks':'outside',
+                           'ticklen':2,
+                           'side':'left',
+                           #'exponentformat':'e', # 科学记数法
+                           #'tickformat':'0.01E', # 统一小数点
+                           #'range':(0,1500),
+                           }
+                    )
+                fig.layout.font.family = 'Helvetica'
+                fig.write_html(self.filepath_title+'Curve of '+self.All_Data_Area_IS_1.loc[i,'Identity keys']+' - '+Warm_RE+f"R²={r2:.4f}"+'-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.html',config={'responsive': False}) 
+                try:
+                    #if self.ManualListPath == '':
+                        fig = go.Figure()
+                        for ii in self.Data_params.keys():
+                            if type(self.Data_params[ii]['TargetList'].loc[i,'Plot_RT_1']) != str:
+                                fig.add_trace(
+                                    go.Scatter(
+                                        x = [x/60 for x in self.Data_params[ii]['TargetList'].loc[i,'Plot_RT_1']],
+                                        y = self.Data_params[ii]['TargetList'].loc[i,'Plot_Int_1'],
+                                        hovertemplate=(
+                                        "RT: %{x}<br>"
+                                        "Int: %{y}<br>"
+                                        "<extra></extra>"),
+                                        mode='lines',
+                                        name=ii,
+                                        line={'width':2,'color':'rgba(247,174,177,1)'},
+                                        hoverinfo="skip",
+                                        showlegend=False,
+                                        legendgroup=ii,
+                                        fill="tozeroy",
+                                        fillcolor="rgba(31, 119, 180, 0.25)",
+                                        ))
+                                fig.add_trace(
+                                    go.Scatter(
+                                        x = [x/60 for x in self.Data_params[ii]['TargetList'].loc[i,'Plot_RT_All_1']],
+                                        y = self.Data_params[ii]['TargetList'].loc[i,'Plot_Int_All_1'],
+                                        hovertemplate=(
+                                        "RT: %{x}<br>"
+                                        "Int: %{y}<br>"
+                                        "<extra></extra>"),
+                                        mode='lines',
+                                        name=ii,
+                                        line={'width':2,'color':'rgba(247,174,177,1)'},
+                                        showlegend=True,
+                                        legendgroup=ii,
+                                        ))
+                        fig.update_layout(
+                            #margin=dict(l=50, r=150, b=50, t=50, pad=4),
+                            autosize=False,
+                            width=700,
+                            height=600,
+                            title='Curve of '+self.All_Data_Area_IS_1.loc[i,'Identity keys'],
+                            titlefont={'size':20},
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            xaxis={'title':{'text':'Concentration','font':{'size':15},'standoff':0},
+                                   'linecolor':'black',
+                                   'tickfont':{'size':11},
+                                   'ticks':'outside',
+                                   'ticklen':2,
+                                   # 添加range设置，在两端留出空白
+                                   #'range':[-0.5, len(x_List)-0.5]  # 这里-0.5和+0.5表示两端各留出相当于半个类别的空白
+                                   },
+                            yaxis={'title':{'text':'Peak area ratio','font':{'size':15},'standoff':0},
+                                   'linecolor':'black',
+                                   'tickfont':{'size':11},
+                                   'ticks':'outside',
+                                   'ticklen':2,
+                                   'side':'left',
+                                   #'exponentformat':'e', # 科学记数法
+                                   #'tickformat':'0.01E', # 统一小数点
+                                   #'range':(0,1500),
+                                   }
+                            )
+                        fig.layout.font.family = 'Helvetica'
+                        fig.write_html(self.filepath_title+'Area of '+self.All_Data_Area_IS_1.loc[i,'Identity keys']+'-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.html',config={'responsive': False})
+                except Exception:
+                    print('Area Draw error')
             else:
-                Blank_mean = 0
-            y = list(self.All_Data_Area_IS_1.loc[i,STD_key])
-            X = [[X[x]] for x in range(len(X)) if type(y[x]) == float or type(y[x]) == np.float64]
-            y = np.array([y[x] for x in range(len(y)) if type(y[x]) == float or type(y[x]) == np.float64])-Blank_mean
-            model = LinearRegression().fit(X, y)
-            slope, intercept, r2 = model.coef_[0], model.intercept_, model.score(X, y)
-            results[self.All_Data_Area_IS_1.loc[i,'Identity keys']] = {"slope": slope, "intercept": intercept, "r2": r2}
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(
-                    x=[x[0] for x in X],
-                    y=list(model.predict(X)),# 绑定额外数据
-                    hovertemplate=(
-                    "Concentration: %{x}<br>"
-                    "STD / IS: %{y}<br>"
-                    "<extra></extra>"),
-                    mode='lines',
-                    name=self.All_Data_Area_IS_1.loc[i,'Identity keys'],
-                    line={'width':2,'color':'rgba(247,174,177,1)'},
-                    ))
-            fig.add_trace(
-                go.Scatter(
-                    x=[x[0] for x in X],
-                    y=y,# 绑定额外数据
-                    hovertemplate=(
-                    "Concentration: %{x}<br>"
-                    "STD / IS: %{y}<br>"
-                    "<extra></extra>"),
-                    mode='markers',
-                    name=self.All_Data_Area_IS_1.loc[i,'Identity keys'],
-                    line={'width':2},
-                    marker=dict(
-                        size=10,
-                        color='rgba(247,174,177,0.7)',
-                        line=dict(width=1, color="black")
-                    )))
-            fig.update_layout(
-                legend={
-                    'xanchor': 'right',
-                    'x': 1.1,  # 改为 0.95，让图例在画布内部（95% 宽度处）
-                    'y': 0.5,   # 垂直居中
-                    'bgcolor': 'rgba(255,255,255,0.3)',  # 可选：添加半透明背景
-                },
-                margin=dict(l=50, r=150, b=50, t=50, pad=4),
-                autosize=False,
-                width=700,
-                height=600,
-                title='Curve of '+self.All_Data_Area_IS_1.loc[i,'Identity keys'],
-                titlefont={'size':20},
-                plot_bgcolor='rgba(0,0,0,0)',
-                xaxis={'title':{'text':'Concentration','font':{'size':15},'standoff':0},
-                       'linecolor':'black',
-                       'tickfont':{'size':11},
-                       'ticks':'outside',
-                       'ticklen':2,
-                       # 添加range设置，在两端留出空白
-                       #'range':[-0.5, len(x_List)-0.5]  # 这里-0.5和+0.5表示两端各留出相当于半个类别的空白
-                       },
-                yaxis={'title':{'text':'Peak area ratio','font':{'size':15},'standoff':0},
-                       'linecolor':'black',
-                       'tickfont':{'size':11},
-                       'ticks':'outside',
-                       'ticklen':2,
-                       'side':'left',
-                       #'exponentformat':'e', # 科学记数法
-                       #'tickformat':'0.01E', # 统一小数点
-                       #'range':(0,1500),
-                       }
-                )
-            fig.layout.font.family = 'Helvetica'
-            fig.write_html(self.filepath_title+'Curve of '+self.All_Data_Area_IS_1.loc[i,'Identity keys']+' - R^2 '+f"R²={r2:.4f}"+'-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.html',config={'responsive': False})
+                results[self.All_Data_Area_IS_1.loc[i,'Identity keys']] = {"slope": '', "intercept": '', "r2": '', 'RE':[''], 'X_set':['']}
+                temp_DF = pd.DataFrame({"Identity keys":self.All_Data_Area_IS_1.loc[i,'Identity keys'],"slope": slope[0], "intercept": intercept[0], "r2": r2, 'RE':[RE], 'X_L':X_set[0],'X_R':X_set[-1]})
+                results_DF = pd.concat([results_DF,temp_DF])
         with open(self.filepath_title+'Curve Data-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.json', 'w') as f:
-            json.dump(results, f, indent=4)
+            json.dump(results, f)
+        results_DF['Regression equation'] = ''
+        for i in range(len(results_DF)):
+            if results_DF.loc[i,'slope'] != '':
+                if results_DF.loc[i,'intercept'] >= 0:
+                    results_DF.loc[i,'Regression equation'] = 'y = ' + str(np.around(results_DF.loc[i,'slope'],4)) + 'x + ' + str(np.around(results_DF.loc[i,'intercept'],4))
+                else:
+                    results_DF.loc[i,'Regression equation'] = 'y = ' + str(np.around(results_DF.loc[i,'slope'],4)) + 'x - ' + str(np.around(abs(results_DF.loc[i,'intercept']),4))
+        results_DF['Regression equation'] = results_DF.apply(lambda row: 'y = '+str(np.around(row['slope'],4))+'')
+        results_DF.to_excel(self.filepath_title+'Curve Data-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.xlsx')
         self.Label_process_sub.setText("Finish")
         self.process_bar.setValue(100)
         self.PushButton_Run.setEnabled(True)
@@ -406,6 +673,7 @@ class MRMProcessorUI(QWidget):
             'Point': self.LineEdit_Point.text(),
             'TargetPath': self.TargetPath,
             'Export': self.Combox_Export.currentText(),
+            'ManualList':self.ManualListPath
         }
         self.worker = MRMWorker(self.Data_params, self.params)
         self.worker.progress.connect(self.update_progress)
@@ -421,6 +689,22 @@ class MRMWorker(QThread):
         self.Data_params = Data_params
         self.params = params
 
+    def request_stop(self):
+        self._stop = True
+        # 尽量取消还没开始的任务
+        for f in self.futures:
+            try:
+                f.cancel()
+            except Exception:
+                pass
+        # 让进程池尽快关闭（会取消未开始的 future）
+        if self.executor is not None:
+            try:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                # 旧 Python 版本没有 cancel_futures 参数
+                self.executor.shutdown(wait=False)
+
     def run(self):
         total_tasks = len(self.Data_params)
         result_dict = {}
@@ -428,7 +712,7 @@ class MRMWorker(QThread):
         with ProcessPoolExecutor(max_workers=max(1, os.cpu_count()-1)) as executor:
             future_to_key = {}
             for key, info in self.Data_params.items():
-                if info['LineEdit_Manual'].text() == '':
+                if self.params['ManualList'] == '':
                     future = executor.submit(
                         pool_MRM,
                         info['Path'],
@@ -439,7 +723,8 @@ class MRMWorker(QThread):
                         int(self.params['Point']),
                         self.params['TargetPath'],
                         self.params['Export'],
-                        info['Type']
+                        info['Type'],
+                        False
                     )
                 else:
                     future = executor.submit(
@@ -450,9 +735,10 @@ class MRMWorker(QThread):
                         float(self.params['RT_Tor']) * 60,
                         int(self.params['Int_min']),
                         int(self.params['Point']),
-                        info['LineEdit_Manual'].text(),
+                        self.params['ManualList'],
                         self.params['Export'],
-                        info['Type']
+                        info['Type'],
+                        True
                     )
                 future_to_key[future] = key
             tasks_done = 0
@@ -471,23 +757,34 @@ class MRMWorker(QThread):
         # 所有任务完成，发射 finished 信号
         self.finished.emit(result_dict)
 
-def pool_MRM(FilePath,MS1_Tor,IS_RT_Tor,RT_Tor,min_Int,Points,List_Path,Detailed,Sample_Type):
+def pool_MRM(FilePath,MS1_Tor,IS_RT_Tor,RT_Tor,min_Int,Points,List_Path,Detailed,Sample_Type,Manual=False):
     if Detailed == 'Detailed Report':
         folder_path = Path(FilePath[0:-5])
         folder_path.mkdir(exist_ok=True)
         Output_Path = FilePath[0:-5]
     else:
         Output_Path = ''
-    if Sample_Type != 'Blank':
-        temp_MRM = MRMProcess(FilePath)
-        temp_MRM.set_param('MS1_Tor',MS1_Tor)
-        temp_MRM.set_param('IS_RT_Tor',IS_RT_Tor)
-        temp_MRM.set_param('Target_RT_Tor',RT_Tor)
-        temp_MRM.set_param('min_Int',min_Int)
-        temp_MRM.set_param('Points',Points)
-        temp_MRM.load_TargetList(TargetPath=List_Path,DefFilePath=Output_Path)
-        temp_MRM.detect_Peak_MRM(FilePath=Output_Path)
-        return copy.deepcopy(temp_MRM.TargetList),copy.deepcopy(temp_MRM.Calibrant)
+    if Manual==False:
+        if Sample_Type != 'Blank':
+            temp_MRM = MRMProcess(FilePath)
+            temp_MRM.set_param('MS1_Tor',MS1_Tor)
+            temp_MRM.set_param('IS_RT_Tor',IS_RT_Tor)
+            temp_MRM.set_param('Target_RT_Tor',RT_Tor)
+            temp_MRM.set_param('min_Int',min_Int)
+            temp_MRM.set_param('Points',Points)
+            temp_MRM.load_TargetList(TargetPath=List_Path,DefFilePath=Output_Path)
+            temp_MRM.detect_Peak_MRM(FilePath=Output_Path)
+            return copy.deepcopy(temp_MRM.TargetList),copy.deepcopy(temp_MRM.Calibrant)
+        else:
+            temp_MRM = MRMProcess(FilePath)
+            temp_MRM.set_param('MS1_Tor',MS1_Tor)
+            temp_MRM.set_param('IS_RT_Tor',IS_RT_Tor)
+            temp_MRM.set_param('Target_RT_Tor',RT_Tor)
+            temp_MRM.set_param('min_Int',min_Int)
+            temp_MRM.set_param('Points',Points)
+            temp_MRM.load_TargetList(TargetPath=List_Path,DefFilePath=Output_Path)
+            temp_MRM.detect_Blank(FilePath=Output_Path)
+            return copy.deepcopy(temp_MRM.TargetList),copy.deepcopy(temp_MRM.Calibrant)
     else:
         temp_MRM = MRMProcess(FilePath)
         temp_MRM.set_param('MS1_Tor',MS1_Tor)
@@ -495,8 +792,11 @@ def pool_MRM(FilePath,MS1_Tor,IS_RT_Tor,RT_Tor,min_Int,Points,List_Path,Detailed
         temp_MRM.set_param('Target_RT_Tor',RT_Tor)
         temp_MRM.set_param('min_Int',min_Int)
         temp_MRM.set_param('Points',Points)
-        temp_MRM.load_TargetList(TargetPath=List_Path,DefFilePath=Output_Path)
-        temp_MRM.detect_Blank(FilePath=Output_Path)
+        name_begin = FilePath.rfind('/')
+        if name_begin == -1:
+            name_begin = FilePath.rfind('\\')
+        Name = FilePath[name_begin+1:len(FilePath)-5]
+        temp_MRM.load_ManualList(List_Path,Name)
         return copy.deepcopy(temp_MRM.TargetList),copy.deepcopy(temp_MRM.Calibrant)
 
 class MRMProcess(object):   
@@ -506,8 +806,8 @@ class MRMProcess(object):
         ''' 储存文件pyopenms.MzMLFile().store("filtered.mzML", exp) '''
         pyopenms.MzMLFile().load(self.file_path,self.OriginData)
         self.OriginData.sortSpectra(True)
-        self.__param = {'MS1_Tor':0.35,'RT_Tor':6,'IS_RT_Tor':30,'Target_RT_Tor':18,'min_Int':2000,'min_IS_Int':10000,'min_MZ':100,'min_RT':60,'min_RT_width':6,'max_Noise':2000,
-                        'RI_Tor':0.02,'Deconvolution':False,'FeatureDetectPlot':3,'MergeRule':'Union',
+        self.__param = {'MS1_Tor':0.35,'RT_Tor':6,'IS_RT_Tor':30,'Target_RT_Tor':6,'min_Int':2000,'min_IS_Int':10000,'min_MZ':100,'min_RT':60,'min_RT_width':6,'max_Noise':2000,
+                        'RI_Tor':0.02,'Deconvolution':False,'FeatureDetectPlot':2,'MergeRule':'Union',
                         'UpDown_gap':10,'saveAutoList':False,'smooth':5,'Points':8,'DeconvolutionSimilarityScore':0.98,
                         'assign MS2':True,'FlowRT':2}
         temp_DF_List = []
@@ -567,15 +867,14 @@ class MRMProcess(object):
             return merged_intervals, element_counts
         self.TargetList = pd.read_excel(TargetPath, engine='openpyxl')
         if 'IS' in self.TargetList.keys():
-            print('IS')
             self.Calibrant = self.TargetList[self.TargetList['IS'].isna()]
             self.Calibrant.reset_index(drop=True,inplace=True)
-            MRM_List = MRM_List = [(x,y) for x,y in zip(self.Calibrant['1_Q1'],self.Calibrant['1_Q3'])]
+            MRM_List = [(x,y,z) for x,y,z in zip(self.Calibrant['1_Q1'],self.Calibrant['1_Q3'],self.Calibrant['Polarity'])]
             MRM_List = list(set(MRM_List))
             CalibrantList = []
             for i in MRM_List:
-                temp_Calibrant = self.Calibrant[(abs(self.Calibrant['1_Q1']-i[0])<=self.get_param('MS1_Tor'))&(abs(self.Calibrant['1_Q3']-i[1])<=self.get_param('MS1_Tor'))]
-                temp_CL_set = pd.DataFrame({'Identity keys':[list(temp_Calibrant.loc[temp_Calibrant.index,'Identity keys'])],'RT':[list(temp_Calibrant.loc[temp_Calibrant.index,'RT'])],'1_Q1':i[0],'1_Q3':i[1],'2_Q1':temp_Calibrant.loc[temp_Calibrant.index[0],'2_Q1'],'2_Q3':temp_Calibrant.loc[temp_Calibrant.index[0],'2_Q3'],'TL_Index':[list(temp_Calibrant.index)]})
+                temp_Calibrant = self.Calibrant[(abs(self.Calibrant['1_Q1']-i[0])<=self.get_param('MS1_Tor'))&(abs(self.Calibrant['1_Q3']-i[1])<=self.get_param('MS1_Tor'))&(self.Calibrant['Polarity']==i[2])]
+                temp_CL_set = pd.DataFrame({'Identity keys':[list(temp_Calibrant.loc[temp_Calibrant.index,'Identity keys'])],'RT':[list(temp_Calibrant.loc[temp_Calibrant.index,'RT'])],'Polarity':i[2],'1_Q1':i[0],'1_Q3':i[1],'2_Q1':temp_Calibrant.loc[temp_Calibrant.index[0],'2_Q1'],'2_Q3':temp_Calibrant.loc[temp_Calibrant.index[0],'2_Q3'],'TL_Index':[list(temp_Calibrant.index)]})
                 CalibrantList.append(temp_CL_set)
             self.Calibrant_set=pd.concat(CalibrantList,ignore_index=True)
             self.TargetList = self.TargetList[self.TargetList['IS'].notna()]
@@ -597,9 +896,9 @@ class MRMProcess(object):
             bar = Bar('Pick Calibrants', max=len(self.Calibrant_set))
             for i in range(len(self.Calibrant_set)):  
                 bar.next()
-                MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.Calibrant_set.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.Calibrant_set.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))]
+                MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.Calibrant_set.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.Calibrant_set.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.Calibrant_set.loc[i,'Polarity'])]
                 if pd.notna(self.Calibrant_set.loc[i,'2_Q1']):
-                    MRM_2 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.Calibrant_set.loc[i,'2_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.Calibrant_set.loc[i,'2_Q3'])<=self.get_param('MS1_Tor'))]
+                    MRM_2 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.Calibrant_set.loc[i,'2_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.Calibrant_set.loc[i,'2_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.Calibrant_set.loc[i,'Polarity'])]
                 else:
                     MRM_2 = MRM_1
                 if len(MRM_1)>0 and len(MRM_2)>0:
@@ -651,7 +950,8 @@ class MRMProcess(object):
                                     ))
                     ''' MRM-1 '''
                     Noise_1 = self.Calculate_Noise(Origin_RT_List_1,Origin_Int_List_1)
-                    time_seq,Count_seq = generate_and_merge_intervals([x*60 for x in self.Calibrant_set.loc[i,'RT']],self.get_param('IS_RT_Tor'))
+                    Baseline_1 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_1,Origin_Int_List_1,[],[],Noise_1,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
+                    time_seq,Count_seq = generate_and_merge_intervals([x*60 for x in self.Calibrant_set.loc[i,'RT']],self.get_param('IS_RT_Tor')+6)
                     All_Peak_Begin_1 = []
                     All_Peak_End_1 = []
                     All_Peak_Top_1 = []
@@ -664,7 +964,7 @@ class MRMProcess(object):
                         Index_forDetect = [x for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
                         RT_List_forDetect = [Origin_RT_List_1[x] for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
                         Int_List_forDetect = [Origin_Int_List_1[x] for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
-                        Peak_Result_1 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect)
+                        Peak_Result_1 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect,Baseline_1)
                         (Peak_Begin_1,Peak_End_1,Peak_Top_1,Area_List_1,Int_List_1) = Peak_Result_1
                         if len(Peak_Begin_1) > 0 and len(Peak_Begin_1) < Count_seq[i_seq]:
                             Ex_Peak_Begin_1 = [0]+Peak_End_1
@@ -716,6 +1016,7 @@ class MRMProcess(object):
                     RT_R_1 = All_RT_R_1
                     ''' MRM-2 '''
                     Noise_2 = self.Calculate_Noise(Origin_RT_List_2,Origin_Int_List_2)
+                    Baseline_2 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_2,Origin_Int_List_2,[],[],Noise_2,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
                     All_Peak_Begin_2 = []
                     All_Peak_End_2 = []
                     All_Peak_Top_2 = []
@@ -728,7 +1029,7 @@ class MRMProcess(object):
                         Index_forDetect = [x for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
                         RT_List_forDetect = [Origin_RT_List_2[x] for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
                         Int_List_forDetect = [Origin_Int_List_2[x] for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
-                        Peak_Result_2 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect)
+                        Peak_Result_2 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect,Baseline_2)
                         (Peak_Begin_2,Peak_End_2,Peak_Top_2,Area_List_2,Int_List_2) = Peak_Result_2
                         if len(Peak_Begin_2) > 0 and len(Peak_Begin_2) < Count_seq[i_seq]:
                             Ex_Peak_Begin_2 = [0]+Peak_End_2
@@ -781,8 +1082,8 @@ class MRMProcess(object):
                     Score_matrix= np.zeros([len(RT_List_1),len(RT_List_2)])
                     for i_1 in range(len(RT_List_1)):
                         for i_2 in range(len(RT_List_2)):
-                            if abs(RT_List_1[i_1]-RT_List_2[i_2])<self.get_param('RT_Tor'):
-                                Score_matrix[i_1,i_2] = 1-abs(RT_List_1[i_1]-RT_List_2[i_2])/self.get_param('RT_Tor')
+                            if abs(RT_List_1[i_1]-RT_List_2[i_2])<self.get_param('Target_RT_Tor'):
+                                Score_matrix[i_1,i_2] = 1-abs(RT_List_1[i_1]-RT_List_2[i_2])/self.get_param('Target_RT_Tor')
                     Sm_1,Sm_2 = linear_sum_assignment(Score_matrix,True)
                     Sm_Filter = [(x,y) for x,y in zip(Sm_1,Sm_2) if Score_matrix[x,y]>0]
                     
@@ -790,24 +1091,24 @@ class MRMProcess(object):
                     for i_1 in range(len(Sm_Filter)):
                         for i_2 in range(len(self.Calibrant_set.loc[i,'RT'])):
                             if abs(RT_List_1[Sm_Filter[i_1][0]]-self.Calibrant_set.loc[i,'RT'][i_2]*60)< self.get_param('IS_RT_Tor') and abs(RT_List_2[Sm_Filter[i_1][1]]-self.Calibrant_set.loc[i,'RT'][i_2]*60)< self.get_param('IS_RT_Tor'):
-                                Score_matrix[i_1,i_2] = 2-abs(RT_List_1[Sm_Filter[i_1][0]]-self.Calibrant_set.loc[i,'RT'][i_2]*60)/ self.get_param('IS_RT_Tor') - abs(RT_List_2[Sm_Filter[i_1][1]]-self.Calibrant_set.loc[i,'RT'][i_2]*60)/ self.get_param('IS_RT_Tor') + 0.5*(Int_List_1[Sm_Filter[i_1][0]]/max(Int_List_1) + Int_List_2[Sm_Filter[i_1][1]]/max(Int_List_2))
+                                Score_matrix[i_1,i_2] = 0.25*(2-abs(RT_List_1[Sm_Filter[i_1][0]]-self.Calibrant_set.loc[i,'RT'][i_2]*60)/ self.get_param('IS_RT_Tor') - abs(RT_List_2[Sm_Filter[i_1][1]]-self.Calibrant_set.loc[i,'RT'][i_2]*60)/ self.get_param('IS_RT_Tor')) + 0.25*(Int_List_1[Sm_Filter[i_1][0]]/max(Int_List_1) + Int_List_2[Sm_Filter[i_1][1]]/max(Int_List_2))
                     Sm_1,Sm_2 = linear_sum_assignment(Score_matrix,True)         
                     Sm_Assign = [(x,y) for x,y in zip(Sm_1,Sm_2) if Score_matrix[x,y]>0]
                     for i_1,i_2 in Sm_Assign:
-                        self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'RT_1'] = np.around(RT_List_1[Sm_Filter[i_1][0]]/60,2)
+                        self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'RT_1'] = np.around(RT_List_1[Sm_Filter[i_1][0]]/60,3)
                         self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Area_1'] = int(Area_List_1[Sm_Filter[i_1][0]])
                         self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Hight_1'] = int(Int_List_1[Sm_Filter[i_1][0]])
                         self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Noise_1'] = int(Noise_1)
-                        self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_left_1'] = np.around(RT_L_1[Sm_Filter[i_1][0]]/60,2)
-                        self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_right_1'] = np.around(RT_R_1[Sm_Filter[i_1][0]]/60,2)
+                        self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_left_1'] = np.around(RT_L_1[Sm_Filter[i_1][0]]/60,4)
+                        self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_right_1'] = np.around(RT_R_1[Sm_Filter[i_1][0]]/60,4)
                         self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'RT_Calibrant'] = np.around(RT_List_1[Sm_Filter[i_1][0]]/60,2)
                         if pd.notna(self.Calibrant_set.loc[i,'2_Q1']):
-                            self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'RT_2'] = np.around(RT_List_2[Sm_Filter[i_1][1]]/60,2)
+                            self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'RT_2'] = np.around(RT_List_2[Sm_Filter[i_1][1]]/60,3)
                             self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Area_2'] = int(Area_List_2[Sm_Filter[i_1][1]])
                             self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Hight_2'] = int(Int_List_2[Sm_Filter[i_1][1]])
                             self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Noise_2'] = int(Noise_2)
-                            self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_left_2'] = np.around(RT_L_2[Sm_Filter[i_1][1]]/60,2)
-                            self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_right_2'] = np.around(RT_R_2[Sm_Filter[i_1][1]]/60,2)
+                            self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_left_2'] = np.around(RT_L_2[Sm_Filter[i_1][1]]/60,4)
+                            self.Calibrant.loc[self.Calibrant_set.loc[i,'TL_Index'][i_2],'Edge_right_2'] = np.around(RT_R_2[Sm_Filter[i_1][1]]/60,4)
                     if len(DefFilePath)>0:
                         for i_1,i_2 in Sm_Assign:
                             fig_1.add_trace(
@@ -937,16 +1238,247 @@ class MRMProcess(object):
                             Index_R = np.where(Diff_Right==min(Diff_Right))[0][0]
                             RT_Fix = 0.5*(self.TargetList.loc[i,'RT']*self.Calibrant.loc[Index_Left[Index_L],'RT_Calibrant']/self.Calibrant.loc[Index_Left[Index_L],'RT']+self.TargetList.loc[i,'RT']*self.Calibrant.loc[Index_Right[Index_R],'RT_Calibrant']/self.Calibrant.loc[Index_Right[Index_R],'RT'])
                         self.TargetList.loc[i,'RT'] = RT_Fix
-        MRM_List = MRM_List = [(x,y) for x,y in zip(self.TargetList['1_Q1'],self.TargetList['1_Q3'])]
+        MRM_List = [(x,y,z) for x,y,z in zip(self.TargetList['1_Q1'],self.TargetList['1_Q3'],self.TargetList['Polarity'])]
         MRM_List = list(set(MRM_List))
         TargetList = []
         for i in MRM_List:
-            temp_TargetList = self.TargetList[(abs(self.TargetList['1_Q1']-i[0])<=self.get_param('MS1_Tor'))&(abs(self.TargetList['1_Q3']-i[1])<=self.get_param('MS1_Tor'))]
-            temp_TL_set = pd.DataFrame({'Identity keys':[list(temp_TargetList.loc[temp_TargetList.index,'Identity keys'])],'RT':[list(temp_TargetList.loc[temp_TargetList.index,'RT'])],'1_Q1':i[0],'1_Q3':i[1],'2_Q1':temp_TargetList.loc[temp_TargetList.index[0],'2_Q1'],'2_Q3':temp_TargetList.loc[temp_TargetList.index[0],'2_Q3'],'TL_Index':[list(temp_TargetList.index)]})
+            temp_TargetList = self.TargetList[(abs(self.TargetList['1_Q1']-i[0])<=self.get_param('MS1_Tor'))&(abs(self.TargetList['1_Q3']-i[1])<=self.get_param('MS1_Tor'))&(self.TargetList['Polarity']==i[2])]
+            temp_TL_set = pd.DataFrame({'Identity keys':[list(temp_TargetList.loc[temp_TargetList.index,'Identity keys'])],'RT':[list(temp_TargetList.loc[temp_TargetList.index,'RT'])],'Polarity':i[2],'1_Q1':i[0],'1_Q3':i[1],'2_Q1':temp_TargetList.loc[temp_TargetList.index[0],'2_Q1'],'2_Q3':temp_TargetList.loc[temp_TargetList.index[0],'2_Q3'],'TL_Index':[list(temp_TargetList.index)]})
             TargetList.append(temp_TL_set)
         self.TargetList_set=pd.concat(TargetList,ignore_index=True)
-
-    def MRMPeakDetecter(self,Auto_RT_List,Auto_Int_List):
+    
+    def load_ManualList(self,ManualPath,Name):
+        def integral(x,y):
+            x_diff = list(np.diff(x))
+            y_mix = [0.5*(y[x]+y[x+1]) for x in range(len(y)-1)]
+            return sum([x_diff[x]*y_mix[x] for x in range(len(x_diff))])
+        def generate_and_merge_intervals(elements, x):
+            counts = [1]*len(elements)
+            # 1. 生成初始区间
+            intervals = []
+            for element, count in zip(elements, counts):
+                center = element
+                intervals.append((center - x, center + x, count))
+            
+            # 2. 按区间起始点排序
+            intervals.sort(key=lambda interval: interval[0])
+            
+            # 3. 合并重叠区间
+            merged_intervals = []
+            element_counts = []
+            
+            for interval in intervals:
+                start, end, count = interval
+                
+                # 如果是第一个区间，直接添加
+                if not merged_intervals:
+                    merged_intervals.append((start, end))
+                    element_counts.append(count)
+                else:
+                    # 检查当前区间是否与最后一个合并区间重叠
+                    last_start, last_end = merged_intervals[-1]
+                    
+                    # 判断是否重叠：当前区间的起始点 <= 上一个区间的结束点
+                    if start <= last_end:
+                        # 合并区间，取更大的结束点
+                        merged_intervals[-1] = (last_start, max(last_end, end))
+                        # 合并计数
+                        element_counts[-1] += count
+                    else:
+                        # 不重叠，添加新区间
+                        merged_intervals.append((start, end))
+                        element_counts.append(count)
+        self.TargetList = pd.read_excel(ManualPath, engine='openpyxl')
+        self.TargetList['RT_1'] = ''
+        self.TargetList['Area_1'] = ''
+        self.TargetList['Hight_1'] = ''
+        self.TargetList['Noise_1'] = ''
+        self.TargetList['Edge_left_1'] = ''
+        self.TargetList['Edge_right_1'] = ''
+        self.TargetList['Noise_1'] = ''
+        self.TargetList['Plot_RT_1'] = ''
+        self.TargetList['Plot_Int_1'] = ''
+        self.TargetList['Plot_RT_All_1'] = ''
+        self.TargetList['Plot_Int_All_1'] = ''
+        self.TargetList['RT_2'] = ''
+        self.TargetList['Area_2'] = ''
+        self.TargetList['Hight_2'] = ''
+        self.TargetList['Noise_2'] = ''
+        self.TargetList['Edge_left_2'] = ''
+        self.TargetList['Edge_right_2'] = ''
+        self.TargetList['Noise_2'] = ''
+        self.Calibrant = self.TargetList[self.TargetList['IS'].isna()]
+        self.Calibrant.reset_index(drop=True,inplace=True)
+        for i in range(len(self.Calibrant)):
+            if self.Calibrant.loc[i,Name+'-L'] >0:
+                MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.Calibrant.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.Calibrant.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.Calibrant.loc[i,'Polarity'])]
+                Origin_RT_List_1 = []
+                Origin_Int_List_1 = []
+                for i_MRM in MRM_1.index:
+                    if len(Origin_Int_List_1) == 0:
+                        Origin_RT_List_1 = list(MRM_1.loc[i_MRM,'RTList'])
+                        Origin_Int_List_1 = list(MRM_1.loc[i_MRM,'Int'])
+                    else:
+                        for ii_MRM in range(len(MRM_1.loc[i_MRM,'RTList'])):
+                            if MRM_1.loc[i_MRM,'RTList'][ii_MRM] not in Origin_RT_List_1:
+                                Origin_Int_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'Int'][ii_MRM])
+                                Origin_RT_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'RTList'][ii_MRM])
+                            else:
+                                Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_1.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+                self.Calibrant.at[i,'Plot_RT_All_1'] = Origin_RT_List_1
+                self.Calibrant.at[i,'Plot_Int_All_1'] = Origin_Int_List_1
+                Noise_1 = self.Calculate_Noise(Origin_RT_List_1,Origin_Int_List_1)
+                Baseline_1 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_1,Origin_Int_List_1,[],[],Noise_1,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
+                L_Place = np.where(abs(np.array(Origin_RT_List_1)-self.Calibrant.loc[i,Name+'-L']*60)==min(abs(np.array(Origin_RT_List_1)-self.Calibrant.loc[i,Name+'-L']*60)))
+                R_Place = np.where(abs(np.array(Origin_RT_List_1)-self.Calibrant.loc[i,Name+'-R']*60)==min(abs(np.array(Origin_RT_List_1)-self.Calibrant.loc[i,Name+'-R']*60)))
+                if len(L_Place[0]) == 1:
+                    L_Place = L_Place[0][0]
+                else:
+                    L_Place_temp = L_Place[0][0]
+                    for i_Place in L_Place[0]:
+                        if Origin_Int_List_1[L_Place_temp] >= Origin_Int_List_1[L_Place[0][i_Place]]:
+                            L_Place_temp = L_Place[0][i_Place]
+                    L_Place = L_Place_temp
+                if len(R_Place[0]) == 1:
+                    R_Place = R_Place[0][0]
+                else:
+                    R_Place_temp = R_Place[0][0]
+                    for i_Place in R_Place[0]:
+                        if Origin_Int_List_1[R_Place_temp] > Origin_Int_List_1[R_Place[0][i_Place]]:
+                            R_Place_temp = R_Place[0][i_Place]
+                    R_Place = R_Place_temp
+                Int_List = Origin_Int_List_1[L_Place:R_Place+1]
+                RT_List = Origin_RT_List_1[L_Place:R_Place+1]
+                self.Calibrant.at[i,'Plot_RT_1'] = RT_List
+                self.Calibrant.at[i,'Plot_Int_1'] = Int_List
+                Area = max(0,integral(RT_List, Int_List)-0.5*(min(Baseline_1,Int_List[0])+min(Baseline_1,Int_List[-1]))*(RT_List[-1]-RT_List[0]))
+                self.Calibrant.loc[i,'RT_1'] = [RT_List[x] for x in range(len(Int_List)) if Int_List[x] == max(Int_List)][0]
+                self.Calibrant.loc[i,'Area_1'] = Area
+                self.Calibrant.loc[i,'Hight_1'] = max(Int_List)
+                self.Calibrant.loc[i,'Noise_1'] = Noise_1
+                self.Calibrant.loc[i,'Edge_left_1'] = RT_List[0]
+                self.Calibrant.loc[i,'Edge_right_1'] = RT_List[-1]
+                self.Calibrant.loc[i,'RT_2'] = [RT_List[x] for x in range(len(Int_List)) if Int_List[x] == max(Int_List)][0]
+                self.Calibrant.loc[i,'Area_2'] = Area
+                self.Calibrant.loc[i,'Hight_2'] = max(Int_List)
+                self.Calibrant.loc[i,'Noise_2'] = Noise_1
+                self.Calibrant.loc[i,'Edge_left_2'] = RT_List[0]
+                self.Calibrant.loc[i,'Edge_right_2'] = RT_List[-1]
+        self.TargetList = self.TargetList[self.TargetList['IS'].notna()]
+        self.TargetList.reset_index(drop=True,inplace=True)
+        self.TargetList['Area_1/IS'] = ''
+        self.TargetList['Area_2/IS'] = ''
+        for i in range(len(self.TargetList)):
+            if self.TargetList.loc[i,Name+'-L'] >0:
+                MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.TargetList.loc[i,'Polarity'])]
+                Origin_RT_List_1 = []
+                Origin_Int_List_1 = []
+                for i_MRM in MRM_1.index:
+                    if len(Origin_Int_List_1) == 0:
+                        Origin_RT_List_1 = list(MRM_1.loc[i_MRM,'RTList'])
+                        Origin_Int_List_1 = list(MRM_1.loc[i_MRM,'Int'])
+                    else:
+                        for ii_MRM in range(len(MRM_1.loc[i_MRM,'RTList'])):
+                            if MRM_1.loc[i_MRM,'RTList'][ii_MRM] not in Origin_RT_List_1:
+                                Origin_Int_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'Int'][ii_MRM])
+                                Origin_RT_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'RTList'][ii_MRM])
+                            else:
+                                Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_1.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+                self.TargetList.at[i,'Plot_RT_All_1'] = Origin_RT_List_1
+                self.TargetList.at[i,'Plot_Int_All_1'] = Origin_Int_List_1
+                Noise_1 = self.Calculate_Noise(Origin_RT_List_1,Origin_Int_List_1)
+                Baseline_1 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_1,Origin_Int_List_1,[],[],Noise_1,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
+                L_Place = np.where(abs(np.array(Origin_RT_List_1)-self.TargetList.loc[i,Name+'-L']*60)==min(abs(np.array(Origin_RT_List_1)-self.TargetList.loc[i,Name+'-L']*60)))
+                R_Place = np.where(abs(np.array(Origin_RT_List_1)-self.TargetList.loc[i,Name+'-R']*60)==min(abs(np.array(Origin_RT_List_1)-self.TargetList.loc[i,Name+'-R']*60)))
+                if len(L_Place[0]) == 1:
+                    L_Place = L_Place[0][0]
+                else:
+                    L_Place_temp = L_Place[0][0]
+                    for i_Place in L_Place[0]:
+                        if Origin_Int_List_1[L_Place_temp] >= Origin_Int_List_1[L_Place[0][i_Place]]:
+                            L_Place_temp = L_Place[0][i_Place]
+                    L_Place = L_Place_temp
+                if len(R_Place[0]) == 1:
+                    R_Place = R_Place[0][0]
+                else:
+                    R_Place_temp = R_Place[0][0]
+                    for i_Place in R_Place[0]:
+                        if Origin_Int_List_1[R_Place_temp] > Origin_Int_List_1[R_Place[0][i_Place]]:
+                            R_Place_temp = R_Place[0][i_Place]
+                    R_Place = R_Place_temp
+                Int_List = Origin_Int_List_1[L_Place:R_Place+1]
+                RT_List = Origin_RT_List_1[L_Place:R_Place+1]
+                Area = max(0,integral(RT_List, Int_List)-0.5*(min(Baseline_1,Int_List[0])+min(Baseline_1,Int_List[-1]))*(RT_List[-1]-RT_List[0]))
+                self.TargetList.loc[i,'RT_1'] = [RT_List[x] for x in range(len(Int_List)) if Int_List[x] == max(Int_List)][0]
+                self.TargetList.loc[i,'Area_1'] = Area
+                IS_Area = list(self.Calibrant[self.Calibrant['Identity keys']==self.TargetList.loc[i,'IS']]['Area_1'])[0]
+                self.TargetList.loc[i,'Area_1/IS'] = Area/IS_Area
+                self.TargetList.loc[i,'Hight_1'] = max(Int_List)
+                self.TargetList.loc[i,'Noise_1'] = Noise_1
+                self.TargetList.at[i,'Plot_RT_1'] = RT_List
+                self.TargetList.at[i,'Plot_Int_1'] = Int_List
+                self.TargetList.loc[i,'Edge_left_1'] = RT_List[0]
+                self.TargetList.loc[i,'Edge_right_1'] = RT_List[-1]
+                self.TargetList.loc[i,'RT_2'] = [RT_List[x] for x in range(len(Int_List)) if Int_List[x] == max(Int_List)][0]
+                self.TargetList.loc[i,'Area_2'] = Area
+                self.TargetList.loc[i,'Area_2/IS'] = Area/IS_Area
+                self.TargetList.loc[i,'Hight_2'] = max(Int_List)
+                self.TargetList.loc[i,'Noise_2'] = Noise_1
+                self.TargetList.at[i,'Plot_RT_1'] = RT_List
+                self.TargetList.at[i,'Plot_Int_1'] = Int_List
+                self.TargetList.loc[i,'Edge_left_2'] = RT_List[0]
+                self.TargetList.loc[i,'Edge_right_2'] = RT_List[-1]
+            
+    def load_TargetList_only(self,TargetPath,DefFilePath=''):
+        def generate_and_merge_intervals(elements, x):
+            counts = [1]*len(elements)
+            # 1. 生成初始区间
+            intervals = []
+            for element, count in zip(elements, counts):
+                center = element
+                intervals.append((center - x, center + x, count))
+            
+            # 2. 按区间起始点排序
+            intervals.sort(key=lambda interval: interval[0])
+            
+            # 3. 合并重叠区间
+            merged_intervals = []
+            element_counts = []
+            
+            for interval in intervals:
+                start, end, count = interval
+                
+                # 如果是第一个区间，直接添加
+                if not merged_intervals:
+                    merged_intervals.append((start, end))
+                    element_counts.append(count)
+                else:
+                    # 检查当前区间是否与最后一个合并区间重叠
+                    last_start, last_end = merged_intervals[-1]
+                    
+                    # 判断是否重叠：当前区间的起始点 <= 上一个区间的结束点
+                    if start <= last_end:
+                        # 合并区间，取更大的结束点
+                        merged_intervals[-1] = (last_start, max(last_end, end))
+                        # 合并计数
+                        element_counts[-1] += count
+                    else:
+                        # 不重叠，添加新区间
+                        merged_intervals.append((start, end))
+                        element_counts.append(count)
+            
+            return merged_intervals, element_counts
+        self.TargetList = pd.read_excel(TargetPath, engine='openpyxl')
+        MRM_List = [(x,y,z) for x,y,z in zip(self.TargetList['1_Q1'],self.TargetList['1_Q3'],self.TargetList['Polarity'])]
+        MRM_List = list(set(MRM_List))
+        TargetList = []
+        for i in MRM_List:
+            temp_TargetList = self.TargetList[(abs(self.TargetList['1_Q1']-i[0])<=self.get_param('MS1_Tor'))&(abs(self.TargetList['1_Q3']-i[1])<=self.get_param('MS1_Tor'))&(self.TargetList['Polarity']==i[2])]
+            temp_TL_set = pd.DataFrame({'Identity keys':[list(temp_TargetList.loc[temp_TargetList.index,'Identity keys'])],'RT':[list(temp_TargetList.loc[temp_TargetList.index,'RT'])],'Polarity':i[2],'1_Q1':i[0],'1_Q3':i[1],'2_Q1':temp_TargetList.loc[temp_TargetList.index[0],'2_Q1'],'2_Q3':temp_TargetList.loc[temp_TargetList.index[0],'2_Q3'],'TL_Index':[list(temp_TargetList.index)]})
+            TargetList.append(temp_TL_set)
+        self.TargetList_set=pd.concat(TargetList,ignore_index=True)
+        
+    def MRMPeakDetecter(self,Auto_RT_List,Auto_Int_List,BaseLine=0):
         # 单个色谱峰识别模块，由下方另一函数调用
         def GaussSmooth(x):
             if len(x)==5:
@@ -956,12 +1488,18 @@ class MRMProcess(object):
             else:
                 op = sum(x)/len(x)
             return op
-        Diff_List = np.diff(Auto_Int_List[1:len(Auto_Int_List)-2])
-        Diff_List = np.array(list(map(lambda x:GaussSmooth(Diff_List[x-2:x+2+1]) if x in range(2,len(Diff_List)-2) else Diff_List[x],range(len(Diff_List)))))
-        FD_List = np.array(list(map(lambda x: MRMProcess.TFFD(x, Auto_Int_List, Auto_RT_List), range(2, len(Auto_Int_List)-2))))
-        FD_List = np.array(list(map(lambda x:GaussSmooth(FD_List[x-2:x+2+1]) if x in range(2,len(FD_List)-2) else FD_List[x],range(len(FD_List)))))
-        SD_List = np.array(list(map(lambda x: MRMProcess.TFSD(x, Auto_Int_List, Auto_RT_List), range(2, len(Auto_Int_List)-2))))
-        SD_List = np.array(list(map(lambda x:GaussSmooth(SD_List[x-2:x+2+1]) if x in range(2,len(SD_List)-2) else SD_List[x],range(len(SD_List)))))
+        def integral(x,y):
+            x_diff = list(np.diff(x))
+            y_mix = [0.5*(y[x]+y[x+1]) for x in range(len(y)-1)]
+            return sum([x_diff[x]*y_mix[x] for x in range(len(x_diff))])
+        raw_Int_List = Auto_Int_List
+        Auto_Int_List = np.array(list(map(lambda x:GaussSmooth(Auto_Int_List[x-1:x+1+1]) if x in range(1,len(Auto_Int_List)-1) else Auto_Int_List[x],range(len(Auto_Int_List)))))
+        Diff_List = [Auto_Int_List[0]]+list(np.diff(Auto_Int_List))
+        Diff_List = np.array(list(map(lambda x:GaussSmooth(Diff_List[x-1:x+1+1]) if x in range(1,len(Diff_List)-1) else Diff_List[x],range(len(Diff_List)))))
+        FD_List = np.array(list(map(lambda x: MRMProcess.TFFD(x, Auto_Int_List, Auto_RT_List), range(len(Auto_Int_List)))))
+        FD_List = np.array(list(map(lambda x:GaussSmooth(FD_List[x-1:x+1+1]) if x in range(1,len(FD_List)-1) else FD_List[x],range(len(FD_List)))))
+        SD_List = np.array(list(map(lambda x: MRMProcess.TFSD(x, Auto_Int_List, Auto_RT_List), range(len(Auto_Int_List)))))
+        SD_List = np.array(list(map(lambda x:GaussSmooth(SD_List[x-1:x+1+1]) if x in range(1,len(SD_List)-1) else SD_List[x],range(len(SD_List)))))
         ABS_FD_List = abs(np.array(FD_List))
         FD_Median = MRMProcess.FD_Line(ABS_FD_List)
         FD_Median_N = FD_Median*(-1)
@@ -978,13 +1516,8 @@ class MRMProcess(object):
         else:
             # 引入人机交互，调整参数？
             Begin_Place,Complet_BP = MRMProcess.Find_FContinuous(FD_List, FD_P, Diff_P, FDMode='P',mergeRule=self.get_param('MergeRule'),FC_Number=self.get_param('FeatureDetectPlot'))
-            Begin_Place += 2
-            Complet_BP += 2
             End_Place,Complet_EP = MRMProcess.Find_FContinuous(FD_List, FD_N, Diff_N, FDMode='N',mergeRule=self.get_param('MergeRule'),FC_Number=self.get_param('FeatureDetectPlot'))
-            End_Place += 2
-            Complet_EP += 2
             Peak_Place = MRMProcess.Find_SDChange(FD_Change, SD_Place)  # 峰顶位置
-            Peak_Place += 2
         if len(Begin_Place) >= 1 and len(End_Place) >= 1 and Begin_Place[0] < End_Place[-1]:
             Peak_Begin = []
             Peak_End = []
@@ -1059,23 +1592,22 @@ class MRMProcess(object):
                 Peak_Top = list(np.delete(Peak_Top,unfit))
             for i_edge in range(len(Peak_Begin)):
                 if Peak_Begin[i_edge]>=self.get_param('FeatureDetectPlot'):
-                    Begin_Filter = np.where(Auto_Int_List[Peak_Begin[i_edge]-self.get_param('FeatureDetectPlot'):Peak_Begin[i_edge]+2*self.get_param('FeatureDetectPlot')+1]==min(Auto_Int_List[Peak_Begin[i_edge]-self.get_param('FeatureDetectPlot'):Peak_Begin[i_edge]+2*self.get_param('FeatureDetectPlot')+1]))[0][-1]
+                    Begin_Filter = np.where(raw_Int_List[Peak_Begin[i_edge]-self.get_param('FeatureDetectPlot'):min(len(raw_Int_List),Peak_Begin[i_edge]+2*self.get_param('FeatureDetectPlot')+1)]==min(raw_Int_List[Peak_Begin[i_edge]-self.get_param('FeatureDetectPlot'):min(len(raw_Int_List),Peak_Begin[i_edge]+2*self.get_param('FeatureDetectPlot')+1)]))[0][-1]
                     if Peak_Begin[i_edge]-self.get_param('FeatureDetectPlot')+Begin_Filter < Peak_Top[i_edge]:
                         Peak_Begin[i_edge] = Peak_Begin[i_edge]-self.get_param('FeatureDetectPlot')+Begin_Filter
-                if Peak_End[i_edge]<len(Auto_Int_List)-self.get_param('FeatureDetectPlot'):
-                    End_Filter = np.where(Auto_Int_List[Peak_End[i_edge]-2*self.get_param('FeatureDetectPlot'):Peak_End[i_edge]+self.get_param('FeatureDetectPlot')+1]==min(Auto_Int_List[Peak_End[i_edge]-2*self.get_param('FeatureDetectPlot'):Peak_End[i_edge]+self.get_param('FeatureDetectPlot')+1]))[0][0]
+                if Peak_End[i_edge]<len(raw_Int_List)-self.get_param('FeatureDetectPlot'):
+                    End_Filter = np.where(raw_Int_List[max(0,Peak_End[i_edge]-2*self.get_param('FeatureDetectPlot')):Peak_End[i_edge]+self.get_param('FeatureDetectPlot')+1]==min(raw_Int_List[max(0,Peak_End[i_edge]-2*self.get_param('FeatureDetectPlot')):Peak_End[i_edge]+self.get_param('FeatureDetectPlot')+1]))[0][0]
                     if Peak_End[i_edge]+End_Filter-2*self.get_param('FeatureDetectPlot')>Peak_Top[i_edge]:
                         Peak_End[i_edge] = Peak_End[i_edge]+End_Filter-2*self.get_param('FeatureDetectPlot')
             Area_List = []
             Int_List = []
             Final = []
             for i_edge in range(len(Peak_Begin)):
-                temp_Area = 0
-                for ii_edge in range(Peak_Begin[i_edge],Peak_End[i_edge]):
-                    temp_Area += 0.5*(Auto_RT_List[ii_edge+1]-Auto_RT_List[ii_edge])*(Auto_Int_List[ii_edge+1]+Auto_Int_List[ii_edge])
-                Area_List.append(temp_Area)
-                Int_List.append(max(np.array(Auto_Int_List)[Peak_Begin[i_edge]:Peak_End[i_edge]+1]))
-                if max(np.array(Auto_Int_List)[Peak_Begin[i_edge]:Peak_End[i_edge]+1]) > self.get_param('min_Int'):
+                temp_Area = integral(Auto_RT_List[Peak_Begin[i_edge]:Peak_End[i_edge]+1],raw_Int_List[Peak_Begin[i_edge]:Peak_End[i_edge]+1])
+                temp_Area = temp_Area - 0.5*(min(raw_Int_List[Peak_Begin[i_edge]],BaseLine)+min(raw_Int_List[Peak_End[i_edge]],BaseLine))*(Auto_RT_List[Peak_End[i_edge]]-Auto_RT_List[Peak_Begin[i_edge]])
+                Area_List.append(max(0,temp_Area))
+                Int_List.append(max(np.array(raw_Int_List)[Peak_Begin[i_edge]:Peak_End[i_edge]+1]))
+                if max(np.array(raw_Int_List)[Peak_Begin[i_edge]:Peak_End[i_edge]+1]) >= self.get_param('min_Int'):
                     Final.append(i_edge)
             Peak_Begin = [Peak_Begin[x] for x in Final]
             Peak_End = [Peak_End[x] for x in Final]
@@ -1086,6 +1618,47 @@ class MRMProcess(object):
         else:
             return [],[],[],[],[]
                 
+    def quick_integral(self,Q1,Q3,Polarity,T1,T2):
+        def integral(x,y):
+            x_diff = list(np.diff(x))
+            y_mix = [0.5*(y[x]+y[x+1]) for x in range(len(y)-1)]
+            return sum([x_diff[x]*y_mix[x] for x in range(len(x_diff))])
+        MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-Q1)<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-Q3)<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==Polarity)]
+        Origin_RT_List_1 = []
+        Origin_Int_List_1 = []
+        for i_MRM in MRM_1.index:
+            if len(Origin_Int_List_1) == 0:
+                Origin_RT_List_1 = list(MRM_1.loc[i_MRM,'RTList'])
+                Origin_Int_List_1 = list(MRM_1.loc[i_MRM,'Int'])
+            else:
+                for ii_MRM in range(len(MRM_1.loc[i_MRM,'RTList'])):
+                    if MRM_1.loc[i_MRM,'RTList'][ii_MRM] not in Origin_RT_List_1:
+                        Origin_Int_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'Int'][ii_MRM])
+                        Origin_RT_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'RTList'][ii_MRM])
+                    else:
+                        Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_1.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+        L_Place = np.where(abs(np.array(Origin_RT_List_1)-T1*60)==min(abs(np.array(Origin_RT_List_1)-T1*60)))
+        R_Place = np.where(abs(np.array(Origin_RT_List_1)-T2*60)==min(abs(np.array(Origin_RT_List_1)-T2*60)))
+        if len(L_Place[0]) == 1:
+            L_Place = L_Place[0][0]
+        else:
+            L_Place_temp = L_Place[0][0]
+            for i_Place in L_Place[0]:
+                if Origin_Int_List_1[L_Place_temp] >= Origin_Int_List_1[L_Place[0][i_Place]]:
+                    L_Place_temp = L_Place[0][i_Place]
+            L_Place = L_Place_temp
+        if len(R_Place[0]) == 1:
+            R_Place = R_Place[0][0]
+        else:
+            R_Place_temp = R_Place[0][0]
+            for i_Place in R_Place[0]:
+                if Origin_Int_List_1[R_Place_temp] > Origin_Int_List_1[R_Place[0][i_Place]]:
+                    R_Place_temp = R_Place[0][i_Place]
+            R_Place = R_Place_temp
+        Int_List = Origin_Int_List_1[L_Place:R_Place+1]
+        RT_List = Origin_RT_List_1[L_Place:R_Place+1]
+        return integral(RT_List, Int_List)
+    
     def Calculate_Noise(self,RT_List,Int_List):
         def GaussSmooth(x):
             if len(x)==5:
@@ -1100,6 +1673,180 @@ class MRMProcess(object):
         Auto_Int_List = np.array(list(map(lambda x:GaussSmooth(Int_List[x-2:x+3]) if 2<=x<=len(Int_List)-2 else Int_List[x],range(len(Int_List)))))
         noise = np.median(abs(Int_List[Int_List>0]-Auto_Int_List[Int_List>0]))
         return noise
+    
+    def calc_global_baseline_with_mask_index(
+        RT_List,
+        Int_List,
+        Peak_Begin,
+        Peak_End,
+        Noise,
+        q=0.20,
+        thr_k=4.0,
+        pad_s=1.5,            
+        pad_points=None,      
+        min_nonpeak_frac=0.05,
+        max_iter=3,
+        drop_zeros=True,
+    ):
+        def _merge_intervals_idx(intervals):
+            """合并可能重叠/相邻的索引区间 intervals=[(i0,i1),...]，输出按起点排序后的合并结果。"""
+            if not intervals:
+                return []
+            norm = []
+            for a, b in intervals:
+                a = int(a); b = int(b)
+                if a > b:
+                    a, b = b, a
+                norm.append((a, b))
+            norm.sort(key=lambda t: t[0])
+
+            merged = [norm[0]]
+            for a, b in norm[1:]:
+                la, lb = merged[-1]
+                if a <= lb + 1:
+                    merged[-1] = (la, max(lb, b))
+                else:
+                    merged.append((a, b))
+            return merged
+
+        def _interval_mask_idx(n, intervals, pad_pts):
+            mask = np.zeros(n, dtype=bool)
+            for a, b in intervals:
+                a2 = max(0, a - pad_pts)
+                b2 = min(n - 1, b + pad_pts)
+                mask[a2:b2 + 1] = True
+            return mask
+
+        def _contiguous_true_regions(mask):
+            mask = np.asarray(mask, dtype=bool)
+            if mask.size == 0:
+                return []
+            diff = np.diff(mask.astype(int))
+            starts = list(np.where(diff == 1)[0] + 1)
+            ends = list(np.where(diff == -1)[0])
+            if mask[0]:
+                starts = [0] + starts
+            if mask[-1]:
+                ends = ends + [mask.size - 1]
+            return list(zip(starts, ends))
+
+        def _quantile_drop0(arr, qv):
+            arr = np.asarray(arr, dtype=float)
+            if arr.size == 0:
+                return None
+            if drop_zeros:
+                nz = arr[arr != 0]
+                if nz.size > 0:
+                    return float(np.quantile(nz, qv))
+                return float(np.quantile(arr, qv))
+            else:
+                return float(np.quantile(arr, qv))
+
+        # ========== check import ==========
+        x = np.asarray(RT_List, dtype=float)
+        y = np.asarray(Int_List, dtype=float)
+        if x.shape != y.shape:
+            raise ValueError("len of RT_List and Int_List")
+        n = y.size
+        if n < 5:
+            raise ValueError("poor points")
+        if Noise <= 0:
+            raise ValueError("Noise error")
+
+        begins = np.asarray(Peak_Begin, dtype=int).reshape(-1)
+        ends = np.asarray(Peak_End, dtype=int).reshape(-1)
+        if begins.size != ends.size:
+            raise ValueError("len of Peak_Begin and Peak_End")
+
+        # ========== pad_pts ==========
+        if pad_points is not None:
+            pad_pts = int(max(0, pad_points))
+        else:
+            dx = np.diff(x)
+            dx = dx[dx > 0]
+            if dx.size == 0:
+                pad_pts = 1
+            else:
+                dt = float(np.median(dx))  
+                pad_pts = int(np.round(pad_s / dt))
+                pad_pts = max(0, pad_pts)
+
+        # ========== mark ==========
+        intervals = [(int(begins[i]), int(ends[i])) for i in range(begins.size)]
+        clipped = []
+        for a, b in intervals:
+            a = max(0, min(n - 1, a))
+            b = max(0, min(n - 1, b))
+            clipped.append((a, b))
+        intervals = _merge_intervals_idx(clipped)
+
+        mask_peak = _interval_mask_idx(n, intervals, pad_pts)
+
+        logs = []
+        base0 = _quantile_drop0(y, q)
+        if base0 is None:
+            raise ValueError("empty")
+        thr = base0 + thr_k * Noise
+
+        # ========== Iterate ==========
+        for it in range(max_iter):
+            nonpeak = y[~mask_peak]
+            if nonpeak.size < max(10, int(min_nonpeak_frac * n)):
+                base0 = _quantile_drop0(y, q)
+                thr = base0 + thr_k * Noise
+                logs.append(f"Ture {it+1}：poor points（{nonpeak.size}），back Q{int(q*100)}。")
+                break
+
+            base0_new = _quantile_drop0(nonpeak, q)
+            if base0_new is None:
+                base0_new = float(np.quantile(nonpeak, q))
+            base0 = base0_new
+            thr = base0 + thr_k * Noise
+
+            cand = (~mask_peak) & (y > thr)
+            if not np.any(cand):
+                logs.append(f"Ture {it+1}：no new peaks")
+                break
+
+            regions = _contiguous_true_regions(cand)
+            expanded = mask_peak.copy()
+            for s, e in regions:
+                s2 = max(0, s - pad_pts)
+                e2 = min(n - 1, e + pad_pts)
+                expanded[s2:e2 + 1] = True
+
+            added = int(np.count_nonzero(expanded) - np.count_nonzero(mask_peak))
+            mask_peak = expanded
+            logs.append(f"Ture {it+1}：new mark points {added}")
+
+        # ========== Final baseline ==========
+        nonpeak_final = y[~mask_peak]
+        if nonpeak_final.size < max(10, int(min_nonpeak_frac * n)):
+            baseline = _quantile_drop0(y, q)
+            logs.append("baseline")
+        else:
+            baseline = _quantile_drop0(nonpeak_final, q)
+            logs.append("baseline")
+
+        if baseline is None:
+            baseline = float(np.quantile(y, q))
+            logs.append("baseline poor points")
+
+        info = {
+            "baseline": float(baseline),
+            "base0": float(base0),
+            "threshold": float(thr),
+            "q": q,
+            "thr_k": thr_k,
+            "pad_s": pad_s,
+            "pad_points": int(pad_pts),
+            "mask_peak_fraction": float(np.mean(mask_peak)),
+            "nonpeak_points": int(nonpeak_final.size),
+            "total_points": int(n),
+            "drop_zeros": bool(drop_zeros),
+            "logs": "；".join(logs),
+        }
+        return float(baseline)
     
     def CosineSimilarity(ExestList, NewList, LOG=False):
         if  len(ExestList) == 0 :
@@ -1184,6 +1931,10 @@ class MRMProcess(object):
             self.TargetList['Noise_1'] = ''
             self.TargetList['Edge_left_1'] = ''
             self.TargetList['Edge_right_1'] = ''
+            self.TargetList['Plot_RT_1'] = ''
+            self.TargetList['Plot_Int_1'] = ''
+            self.TargetList['Plot_RT_All_1'] = ''
+            self.TargetList['Plot_Int_All_1'] = ''
             self.TargetList['RT_2'] = ''
             self.TargetList['Area_2'] = ''
             self.TargetList['Area_2/IS'] = ''
@@ -1195,9 +1946,9 @@ class MRMProcess(object):
             bar = Bar('Processing', max=len(self.TargetList_set))
             for i in range(len(self.TargetList_set)):  
                 bar.next()
-                MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList_set.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList_set.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))]
+                MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList_set.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList_set.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.TargetList_set.loc[i,'Polarity'])]
                 if pd.notna(self.TargetList_set.loc[i,'2_Q1']):
-                    MRM_2 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList_set.loc[i,'2_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList_set.loc[i,'2_Q3'])<=self.get_param('MS1_Tor'))]
+                    MRM_2 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList_set.loc[i,'2_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList_set.loc[i,'2_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.TargetList_set.loc[i,'Polarity'])]
                 else:
                     MRM_2 = MRM_1
                 if len(MRM_1)>0 and len(MRM_2)>0:
@@ -1227,9 +1978,13 @@ class MRMProcess(object):
                                     Origin_RT_List_2.insert(bisect.bisect_left(Origin_RT_List_2,MRM_2.loc[i_MRM,'RTList'][ii_MRM]), MRM_2.loc[i_MRM,'RTList'][ii_MRM])
                                 else:
                                     Origin_Int_List_2[np.where(Origin_RT_List_2==MRM_2.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_2.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_2[np.where(Origin_RT_List_2==MRM_2.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+                    for i_plot in self.TargetList_set.loc[i,'TL_Index']:
+                        self.TargetList.at[i_plot,'Plot_RT_All_1'] = Origin_RT_List_1
+                        self.TargetList.at[i_plot,'Plot_Int_All_1'] = Origin_Int_List_1
                     ''' MRM-1 '''
                     Noise_1 = self.Calculate_Noise(Origin_RT_List_1,Origin_Int_List_1)
-                    time_seq,Count_seq = generate_and_merge_intervals([x*60 for x in self.TargetList_set.loc[i,'RT']],2.5*self.get_param('Target_RT_Tor'))
+                    Baseline_1 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_1,Origin_Int_List_1,[],[],Noise_1,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
+                    time_seq,Count_seq = generate_and_merge_intervals([x*60 for x in self.TargetList_set.loc[i,'RT']],self.get_param('Target_RT_Tor')+12)
                     All_Peak_Begin_1 = []
                     All_Peak_End_1 = []
                     All_Peak_Top_1 = []
@@ -1238,11 +1993,13 @@ class MRMProcess(object):
                     All_RT_List_1 = []
                     All_RT_L_1 = []
                     All_RT_R_1 = []
+                    All_Plot_RT_1 = []
+                    All_Plot_Int_1 = []
                     for i_seq in range(len(time_seq)):
                         Index_forDetect = [x for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
                         RT_List_forDetect = [Origin_RT_List_1[x] for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
                         Int_List_forDetect = [Origin_Int_List_1[x] for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
-                        Peak_Result_1 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect)
+                        Peak_Result_1 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect,Baseline_1)
                         (Peak_Begin_1,Peak_End_1,Peak_Top_1,Area_List_1,Int_List_1) = Peak_Result_1
                         if len(Peak_Begin_1) > 0 and len(Peak_Begin_1) < Count_seq[i_seq]:
                             Ex_Peak_Begin_1 = [0]+Peak_End_1
@@ -1276,6 +2033,8 @@ class MRMProcess(object):
                         RT_List_1 = [Origin_RT_List_1[x] for x in Peak_Top_1]
                         RT_L_1 = [Origin_RT_List_1[x] for x in Peak_Begin_1]
                         RT_R_1 = [Origin_RT_List_1[x] for x in Peak_End_1]
+                        Plot_RT_1 = [Origin_RT_List_1[Peak_Begin_1[x]:Peak_End_1[x]+1] for x in range(len(Peak_Begin_1))]
+                        Plot_Int_1 = [Origin_Int_List_1[Peak_Begin_1[x]:Peak_End_1[x]+1] for x in range(len(Peak_Begin_1))]
                         All_Peak_Begin_1 = All_Peak_Begin_1 + Peak_Begin_1
                         All_Peak_End_1 = All_Peak_End_1 + Peak_End_1
                         All_Peak_Top_1 = All_Peak_Top_1 + Peak_Top_1
@@ -1284,6 +2043,8 @@ class MRMProcess(object):
                         All_RT_List_1 = All_RT_List_1 + RT_List_1
                         All_RT_L_1 = All_RT_L_1 + RT_L_1
                         All_RT_R_1 = All_RT_R_1 + RT_R_1
+                        All_Plot_RT_1 = All_Plot_RT_1 + Plot_RT_1
+                        All_Plot_Int_1 = All_Plot_Int_1 + Plot_Int_1
                     Peak_Begin_1 = All_Peak_Begin_1
                     Peak_End_1 = All_Peak_End_1
                     Peak_Top_1 = All_Peak_Top_1
@@ -1292,8 +2053,11 @@ class MRMProcess(object):
                     RT_List_1 = All_RT_List_1
                     RT_L_1 = All_RT_L_1
                     RT_R_1 = All_RT_R_1
+                    Plot_RT_1 = All_Plot_RT_1
+                    Plot_Int_1 = All_Plot_Int_1
                     ''' MRM-2 '''
                     Noise_2 = self.Calculate_Noise(Origin_RT_List_2,Origin_Int_List_2)
+                    Baseline_2 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_2,Origin_Int_List_2,[],[],Noise_2,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
                     All_Peak_Begin_2 = []
                     All_Peak_End_2 = []
                     All_Peak_Top_2 = []
@@ -1306,7 +2070,7 @@ class MRMProcess(object):
                         Index_forDetect = [x for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
                         RT_List_forDetect = [Origin_RT_List_2[x] for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
                         Int_List_forDetect = [Origin_Int_List_2[x] for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
-                        Peak_Result_2 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect)
+                        Peak_Result_2 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect,Baseline_2)
                         (Peak_Begin_2,Peak_End_2,Peak_Top_2,Area_List_2,Int_List_2) = Peak_Result_2
                         if len(Peak_Begin_2) > 0 and len(Peak_Begin_2) < Count_seq[i_seq]:
                             Ex_Peak_Begin_2 = [0]+Peak_End_2
@@ -1359,16 +2123,16 @@ class MRMProcess(object):
                     Score_matrix= np.zeros([len(RT_List_1),len(RT_List_2)])
                     for i_1 in range(len(RT_List_1)):
                         for i_2 in range(len(RT_List_2)):
-                            if abs(RT_List_1[i_1]-RT_List_2[i_2])<self.get_param('RT_Tor'):
-                                Score_matrix[i_1,i_2] = 1-abs(RT_List_1[i_1]-RT_List_2[i_2])/self.get_param('RT_Tor')
+                            if abs(RT_List_1[i_1]-RT_List_2[i_2])<self.get_param('Target_RT_Tor'):
+                                Score_matrix[i_1,i_2] = 1-abs(RT_List_1[i_1]-RT_List_2[i_2])/self.get_param('Target_RT_Tor')
                     Sm_1,Sm_2 = linear_sum_assignment(Score_matrix,True)
                     Sm_Filter = [(x,y) for x,y in zip(Sm_1,Sm_2) if Score_matrix[x,y]>0]
                     
                     Score_matrix= np.zeros([len(Sm_Filter),len(self.TargetList_set.loc[i,'RT'])])
                     for i_1 in range(len(Sm_Filter)):
                         for i_2 in range(len(self.TargetList_set.loc[i,'RT'])):
-                            if abs(RT_List_1[Sm_Filter[i_1][0]]-self.TargetList_set.loc[i,'RT'][i_2]*60)< self.get_param('Target_RT_Tor') and abs(RT_List_2[Sm_Filter[i_1][1]]-self.TargetList_set.loc[i,'RT'][i_2]*60)< self.get_param('Target_RT_Tor'):
-                                Score_matrix[i_1,i_2] = 2-abs(RT_List_1[Sm_Filter[i_1][0]]-self.TargetList_set.loc[i,'RT'][i_2]*60)/ self.get_param('Target_RT_Tor') - abs(RT_List_2[Sm_Filter[i_1][1]]-self.TargetList_set.loc[i,'RT'][i_2]*60)/ self.get_param('Target_RT_Tor') + 0.5*(Int_List_1[Sm_Filter[i_1][0]]/max(Int_List_1) + Int_List_2[Sm_Filter[i_1][1]]/max(Int_List_2))
+                            if abs(RT_List_1[Sm_Filter[i_1][0]]-self.TargetList_set.loc[i,'RT'][i_2]*60)< self.get_param('Target_RT_Tor') and abs(RT_List_2[Sm_Filter[i_1][1]]-self.TargetList_set.loc[i,'RT'][i_2]*60)< self.get_param('Target_RT_Tor') and Peak_End_1[Sm_Filter[i_1][0]]-Peak_Begin_1[Sm_Filter[i_1][0]] >= self.get_param('Points')-1:
+                                Score_matrix[i_1,i_2] = 0.3*(2-abs(RT_List_1[Sm_Filter[i_1][0]]-self.TargetList_set.loc[i,'RT'][i_2]*60)/ self.get_param('Target_RT_Tor') - abs(RT_List_2[Sm_Filter[i_1][1]]-self.TargetList_set.loc[i,'RT'][i_2]*60)/ self.get_param('Target_RT_Tor')) + 0.25*(Int_List_1[Sm_Filter[i_1][0]]/max(Int_List_1) + Int_List_2[Sm_Filter[i_1][1]]/max(Int_List_2))
                     Sm_1,Sm_2 = linear_sum_assignment(Score_matrix,True)         
                     Sm_Assign = [(x,y) for x,y in zip(Sm_1,Sm_2) if Score_matrix[x,y]>0]
                     for i_1,i_2 in Sm_Assign:
@@ -1376,18 +2140,22 @@ class MRMProcess(object):
                         if len(IS_Area)>0:
                             IS_Area = list(self.Calibrant[self.Calibrant['Identity keys']==self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'IS']]['Area_1'])[0]
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'IS_Area'] = int(IS_Area)
-                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_1/IS'] = np.around(Area_List_1[Sm_Filter[i_1][0]]/IS_Area,4)
+                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_1/IS'] = np.around(Area_List_1[Sm_Filter[i_1][0]]/IS_Area,5)
                         else:
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_1/IS'] = 'None'
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'IS_Area'] = 'None'
-                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'RT_1'] = np.around(RT_List_1[Sm_Filter[i_1][0]]/60,2)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'RT_1'] = np.around(RT_List_1[Sm_Filter[i_1][0]]/60,3)
                         self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_1'] = int(Area_List_1[Sm_Filter[i_1][0]])
                         self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Hight_1'] = int(Int_List_1[Sm_Filter[i_1][0]])
                         self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Noise_1'] = int(Noise_1)
-                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_left_1'] = np.around(RT_L_1[Sm_Filter[i_1][0]]/60,2)
-                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_right_1'] = np.around(RT_R_1[Sm_Filter[i_1][0]]/60,2)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_left_1'] = np.around(RT_L_1[Sm_Filter[i_1][0]]/60,4)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_right_1'] = np.around(RT_R_1[Sm_Filter[i_1][0]]/60,4)
+                        self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_RT_1'] = Plot_RT_1[Sm_Filter[i_1][0]]
+                        self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_Int_1'] = Plot_Int_1[Sm_Filter[i_1][0]]
+                        self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_RT_All_1'] = Origin_RT_List_1
+                        self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_Int_All_1'] = Origin_Int_List_1
                         if pd.notna(self.TargetList_set.loc[i,'2_Q1']):
-                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'RT_2'] = np.around(RT_List_2[Sm_Filter[i_1][1]]/60,2)
+                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'RT_2'] = np.around(RT_List_2[Sm_Filter[i_1][1]]/60,3)
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_2'] = int(Area_List_2[Sm_Filter[i_1][1]])
                             IS_Area = list(self.Calibrant[self.Calibrant['Identity keys']==self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'IS']]['Area_1'])
                             if len(IS_Area)>0:
@@ -1397,8 +2165,8 @@ class MRMProcess(object):
                                 self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_2/IS'] = 'None'
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Hight_2'] = int(Int_List_2[Sm_Filter[i_1][1]])
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Noise_2'] = int(Noise_2)
-                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_left_2'] = np.around(RT_L_2[Sm_Filter[i_1][1]]/60,2)
-                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_right_2'] = np.around(RT_R_2[Sm_Filter[i_1][1]]/60,2)
+                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_left_2'] = np.around(RT_L_2[Sm_Filter[i_1][1]]/60,4)
+                            self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_right_2'] = np.around(RT_R_2[Sm_Filter[i_1][1]]/60,4)
                         x_1=list(MRM_1.loc[:,'RTList']/60)[0][Peak_Begin_1[Sm_Filter[i_1][0]]:Peak_End_1[Sm_Filter[i_1][0]]+1]
                         y_1=list(MRM_1.loc[:,'Int'])[0][Peak_Begin_1[Sm_Filter[i_1][0]]:Peak_End_1[Sm_Filter[i_1][0]]+1]
                         x_2=list(MRM_2.loc[:,'RTList']/60)[0][Peak_Begin_2[Sm_Filter[i_1][1]]:Peak_End_2[Sm_Filter[i_1][1]]+1]
@@ -1712,11 +2480,326 @@ class MRMProcess(object):
             if len(FilePath)>0:
                 self.TargetList.to_excel(FilePath+'/MRM-Manual Results-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.xlsx',index=False)   
     
+    def detect_Peak_MRM_only(self,FilePath=''):
+        def generate_and_merge_intervals(elements, x):
+            counts = [1]*len(elements)
+            # 1. 生成初始区间
+            intervals = []
+            for element, count in zip(elements, counts):
+                center = element
+                intervals.append((center - x, center + x, count))
+            
+            # 2. 按区间起始点排序
+            intervals.sort(key=lambda interval: interval[0])
+            
+            # 3. 合并重叠区间
+            merged_intervals = []
+            element_counts = []
+            
+            for interval in intervals:
+                start, end, count = interval
+                
+                # 如果是第一个区间，直接添加
+                if not merged_intervals:
+                    merged_intervals.append((start, end))
+                    element_counts.append(count)
+                else:
+                    # 检查当前区间是否与最后一个合并区间重叠
+                    last_start, last_end = merged_intervals[-1]
+                    
+                    # 判断是否重叠：当前区间的起始点 <= 上一个区间的结束点
+                    if start <= last_end:
+                        # 合并区间，取更大的结束点
+                        merged_intervals[-1] = (last_start, max(last_end, end))
+                        # 合并计数
+                        element_counts[-1] += count
+                    else:
+                        # 不重叠，添加新区间
+                        merged_intervals.append((start, end))
+                        element_counts.append(count)
+            
+            return merged_intervals, element_counts
+        self.TargetList['IS_Area'] = ''
+        self.TargetList['RT_1'] = ''
+        self.TargetList['Area_1'] = ''
+        self.TargetList['Area_1/IS'] = ''
+        self.TargetList['Hight_1'] = ''
+        self.TargetList['Noise_1'] = ''
+        self.TargetList['Edge_left_1'] = ''
+        self.TargetList['Edge_right_1'] = ''
+        self.TargetList['Plot_RT_1'] = ''
+        self.TargetList['Plot_Int_1'] = ''
+        self.TargetList['Plot_RT_All_1'] = ''
+        self.TargetList['Plot_Int_All_1'] = ''
+        self.TargetList['RT_2'] = ''
+        self.TargetList['Area_2'] = ''
+        self.TargetList['Area_2/IS'] = ''
+        self.TargetList['Hight_2'] = ''
+        self.TargetList['Noise_2'] = ''
+        self.TargetList['Edge_left_2'] = ''
+        self.TargetList['Edge_right_2'] = ''
+        self.TargetList['Similarity'] = ''
+        bar = Bar('Processing', max=len(self.TargetList_set))
+        for i in range(len(self.TargetList_set)):  
+            bar.next()
+            MRM_1 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList_set.loc[i,'1_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList_set.loc[i,'1_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.TargetList_set.loc[i,'Polarity'])]
+            if pd.notna(self.TargetList_set.loc[i,'2_Q1']):
+                MRM_2 = self.Auto_Peak[(abs(self.Auto_Peak['Pre_MZ']-self.TargetList_set.loc[i,'2_Q1'])<=self.get_param('MS1_Tor'))&(abs(self.Auto_Peak['Pro_MZ']-self.TargetList_set.loc[i,'2_Q3'])<=self.get_param('MS1_Tor'))&(self.Auto_Peak['Polarity']==self.TargetList_set.loc[i,'Polarity'])]
+            else:
+                MRM_2 = MRM_1
+            if len(MRM_1)>0 and len(MRM_2)>0:
+                Origin_RT_List_1 = []
+                Origin_RT_List_2 = []
+                Origin_Int_List_1 = []
+                Origin_Int_List_2 = []
+                for i_MRM in MRM_1.index:
+                    if len(Origin_Int_List_1) == 0:
+                        Origin_RT_List_1 = list(MRM_1.loc[i_MRM,'RTList'])
+                        Origin_Int_List_1 = list(MRM_1.loc[i_MRM,'Int'])
+                    else:
+                        for ii_MRM in range(len(MRM_1.loc[i_MRM,'RTList'])):
+                            if MRM_1.loc[i_MRM,'RTList'][ii_MRM] not in Origin_RT_List_1:
+                                Origin_Int_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'Int'][ii_MRM])
+                                Origin_RT_List_1.insert(bisect.bisect_left(Origin_RT_List_1,MRM_1.loc[i_MRM,'RTList'][ii_MRM]), MRM_1.loc[i_MRM,'RTList'][ii_MRM])
+                            else:
+                                Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_1.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_1[np.where(Origin_RT_List_1==MRM_1.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+                for i_MRM in MRM_2.index:
+                    if len(Origin_Int_List_2) == 0:
+                        Origin_RT_List_2 = list(MRM_2.loc[i_MRM,'RTList'])
+                        Origin_Int_List_2 = list(MRM_2.loc[i_MRM,'Int'])
+                    else:
+                        for ii_MRM in range(len(MRM_2.loc[i_MRM,'RTList'])):
+                            if MRM_2.loc[i_MRM,'RTList'][ii_MRM] not in Origin_RT_List_2:
+                                Origin_Int_List_2.insert(bisect.bisect_left(Origin_RT_List_2,MRM_2.loc[i_MRM,'RTList'][ii_MRM]), MRM_2.loc[i_MRM,'Int'][ii_MRM])
+                                Origin_RT_List_2.insert(bisect.bisect_left(Origin_RT_List_2,MRM_2.loc[i_MRM,'RTList'][ii_MRM]), MRM_2.loc[i_MRM,'RTList'][ii_MRM])
+                            else:
+                                Origin_Int_List_2[np.where(Origin_RT_List_2==MRM_2.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_2.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_2[np.where(Origin_RT_List_2==MRM_2.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+                ''' MRM-1 '''
+                Noise_1 = self.Calculate_Noise(Origin_RT_List_1,Origin_Int_List_1)
+                Baseline_1 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_1,Origin_Int_List_1,[],[],Noise_1,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
+                time_seq,Count_seq = generate_and_merge_intervals([x*60 for x in self.TargetList_set.loc[i,'RT']],self.get_param('Target_RT_Tor')+12)
+                All_Peak_Begin_1 = []
+                All_Peak_End_1 = []
+                All_Peak_Top_1 = []
+                All_Area_List_1 = []
+                All_Int_List_1 = []
+                All_RT_List_1 = []
+                All_RT_L_1 = []
+                All_RT_R_1 = []
+                All_Plot_RT_1 = []
+                All_Plot_Int_1 = []
+                for i_seq in range(len(time_seq)):
+                    Index_forDetect = [x for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
+                    RT_List_forDetect = [Origin_RT_List_1[x] for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
+                    Int_List_forDetect = [Origin_Int_List_1[x] for x in range(len(Origin_RT_List_1)) if time_seq[i_seq][0]<=Origin_RT_List_1[x]<=time_seq[i_seq][1]]
+                    Peak_Result_1 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect,Baseline_1)
+                    (Peak_Begin_1,Peak_End_1,Peak_Top_1,Area_List_1,Int_List_1) = Peak_Result_1
+                    if len(Peak_Begin_1) > 0 and len(Peak_Begin_1) < Count_seq[i_seq]:
+                        Ex_Peak_Begin_1 = [0]+Peak_End_1
+                        Ex_Peak_End_1 = Peak_Begin_1+[len(Int_List_forDetect)]
+                        for v in range(len(Ex_Peak_Begin_1)):
+                            if Ex_Peak_Begin_1[v]-Ex_Peak_End_1[v] >= self.get_param('Points') and max(Int_List_forDetect[Ex_Peak_Begin_1[v]:Ex_Peak_End_1[v]]) >= self.get_param('min_Int'):
+                                temp_RT = RT_List_forDetect[Ex_Peak_Begin_1[v]:Ex_Peak_End_1[v]]
+                                temp_Int = Int_List_forDetect[Ex_Peak_Begin_1[v]:Ex_Peak_End_1[v]]
+                                Peak_Result_1 = self.MRMPeakDetecter(temp_RT,temp_Int)
+                                (Ex_Peak_Begin_1,Ex_Peak_End_1,Ex_Peak_Top_1,Ex_Area_List_1,Ex_Int_List_1) = Peak_Result_1
+                                Ex_Time_Begin_1 = [temp_RT[x] for x in Ex_Peak_Begin_1]
+                                Ex_Time_End_1 = [temp_RT[x] for x in Ex_Peak_End_1]
+                                Ex_Time_Top_1 = [temp_RT[x] for x in Ex_Peak_Top_1]
+                                Ex_Peak_Begin_1 = [x for x in range(len(RT_List_forDetect)) if RT_List_forDetect[x] in Ex_Time_Begin_1]
+                                Ex_Peak_End_1 = [x for x in range(len(RT_List_forDetect)) if RT_List_forDetect[x] in Ex_Time_End_1]
+                                Ex_Peak_Top_1 = [x for x in range(len(RT_List_forDetect)) if RT_List_forDetect[x] in Ex_Time_Top_1]
+                                Peak_Begin_1 += Ex_Peak_Begin_1
+                                Peak_End_1 += Ex_Peak_End_1
+                                Peak_Top_1 += Ex_Peak_Top_1
+                                Area_List_1 += Ex_Area_List_1
+                                Int_List_1 += Ex_Int_List_1
+                    Index_1 = [x for x in range(len(Int_List_1)) if Int_List_1[x]>=self.get_param('min_Int')]
+                    Peak_Begin_1 = [Peak_Begin_1[x] for x in Index_1]
+                    Peak_Begin_1 = [Index_forDetect[x] for x in Peak_Begin_1]
+                    Peak_End_1 = [Peak_End_1[x] for x in Index_1]
+                    Peak_End_1 = [Index_forDetect[x] for x in Peak_End_1]
+                    Peak_Top_1 = [Peak_Top_1[x] for x in Index_1]
+                    Peak_Top_1 = [Index_forDetect[x] for x in Peak_Top_1]
+                    Area_List_1 = [Area_List_1[x] for x in Index_1]
+                    Int_List_1 = [Int_List_1[x] for x in Index_1]
+                    RT_List_1 = [Origin_RT_List_1[x] for x in Peak_Top_1]
+                    RT_L_1 = [Origin_RT_List_1[x] for x in Peak_Begin_1]
+                    RT_R_1 = [Origin_RT_List_1[x] for x in Peak_End_1]
+                    Plot_RT_1 = [Origin_RT_List_1[Peak_Begin_1[x]:Peak_End_1[x]+1] for x in range(len(Peak_Begin_1))]
+                    Plot_Int_1 = [Origin_Int_List_1[Peak_Begin_1[x]:Peak_End_1[x]+1] for x in range(len(Peak_Begin_1))]
+                    All_Peak_Begin_1 = All_Peak_Begin_1 + Peak_Begin_1
+                    All_Peak_End_1 = All_Peak_End_1 + Peak_End_1
+                    All_Peak_Top_1 = All_Peak_Top_1 + Peak_Top_1
+                    All_Area_List_1 = All_Area_List_1 + Area_List_1
+                    All_Int_List_1 = All_Int_List_1 + Int_List_1
+                    All_RT_List_1 = All_RT_List_1 + RT_List_1
+                    All_RT_L_1 = All_RT_L_1 + RT_L_1
+                    All_RT_R_1 = All_RT_R_1 + RT_R_1
+                    All_Plot_RT_1 = All_Plot_RT_1 + Plot_RT_1
+                    All_Plot_Int_1 = All_Plot_Int_1 + Plot_Int_1
+                Peak_Begin_1 = All_Peak_Begin_1
+                Peak_End_1 = All_Peak_End_1
+                Peak_Top_1 = All_Peak_Top_1
+                Area_List_1 = All_Area_List_1
+                Int_List_1 = All_Int_List_1
+                RT_List_1 = All_RT_List_1
+                RT_L_1 = All_RT_L_1
+                RT_R_1 = All_RT_R_1
+                Plot_RT_1 = All_Plot_RT_1
+                Plot_Int_1 = All_Plot_Int_1
+                ''' MRM-2 '''
+                Noise_2 = self.Calculate_Noise(Origin_RT_List_2,Origin_Int_List_2)
+                Baseline_2 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_2,Origin_Int_List_2,[],[],Noise_2,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
+                All_Peak_Begin_2 = []
+                All_Peak_End_2 = []
+                All_Peak_Top_2 = []
+                All_Area_List_2 = []
+                All_Int_List_2 = []
+                All_RT_List_2 = []
+                All_RT_L_2 = []
+                All_RT_R_2 = []
+                for i_seq in range(len(time_seq)):
+                    Index_forDetect = [x for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
+                    RT_List_forDetect = [Origin_RT_List_2[x] for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
+                    Int_List_forDetect = [Origin_Int_List_2[x] for x in range(len(Origin_RT_List_2)) if time_seq[i_seq][0]<=Origin_RT_List_2[x]<=time_seq[i_seq][1]]
+                    Peak_Result_2 = self.MRMPeakDetecter(RT_List_forDetect,Int_List_forDetect,Baseline_2)
+                    (Peak_Begin_2,Peak_End_2,Peak_Top_2,Area_List_2,Int_List_2) = Peak_Result_2
+                    if len(Peak_Begin_2) > 0 and len(Peak_Begin_2) < Count_seq[i_seq]:
+                        Ex_Peak_Begin_2 = [0]+Peak_End_2
+                        Ex_Peak_End_2 = Peak_Begin_2+[len(Int_List_forDetect)]
+                        for v in range(len(Ex_Peak_Begin_2)):
+                            if Ex_Peak_Begin_2[v]-Ex_Peak_End_2[v] >= self.get_param('Points') and max(Int_List_forDetect[Ex_Peak_Begin_2[v]:Ex_Peak_End_2[v]]) >= self.get_param('min_Int'):
+                                temp_RT = RT_List_forDetect[Ex_Peak_Begin_2[v]:Ex_Peak_End_2[v]]
+                                temp_Int = Int_List_forDetect[Ex_Peak_Begin_2[v]:Ex_Peak_End_2[v]]
+                                Peak_Result_2 = self.MRMPeakDetecter(temp_RT,temp_Int)
+                                (Ex_Peak_Begin_2,Ex_Peak_End_2,Ex_Peak_Top_2,Ex_Area_List_2,Ex_Int_List_2) = Peak_Result_2
+                                Ex_Time_Begin_2 = [temp_RT[x] for x in Ex_Peak_Begin_2]
+                                Ex_Time_End_2 = [temp_RT[x] for x in Ex_Peak_End_2]
+                                Ex_Time_Top_2 = [temp_RT[x] for x in Ex_Peak_Top_2]
+                                Ex_Peak_Begin_2 = [x for x in range(len(RT_List_forDetect)) if RT_List_forDetect[x] in Ex_Time_Begin_2]
+                                Ex_Peak_End_2 = [x for x in range(len(RT_List_forDetect)) if RT_List_forDetect[x] in Ex_Time_End_2]
+                                Ex_Peak_Top_2 = [x for x in range(len(RT_List_forDetect)) if RT_List_forDetect[x] in Ex_Time_Top_2]
+                                Peak_Begin_2 += Ex_Peak_Begin_2
+                                Peak_End_2 += Ex_Peak_End_2
+                                Peak_Top_2 += Ex_Peak_Top_2
+                                Area_List_2 += Ex_Area_List_2
+                                Int_List_2 += Ex_Int_List_2
+                    Index_2 = [x for x in range(len(Int_List_2)) if Int_List_2[x]>=self.get_param('min_Int')]
+                    Peak_Begin_2 = [Peak_Begin_2[x] for x in Index_2]
+                    Peak_Begin_2 = [Index_forDetect[x] for x in Peak_Begin_2]
+                    Peak_End_2 = [Peak_End_2[x] for x in Index_2]
+                    Peak_End_2 = [Index_forDetect[x] for x in Peak_End_2]
+                    Peak_Top_2 = [Peak_Top_2[x] for x in Index_2]
+                    Peak_Top_2 = [Index_forDetect[x] for x in Peak_Top_2]
+                    Area_List_2 = [Area_List_2[x] for x in Index_2]
+                    Int_List_2 = [Int_List_2[x] for x in Index_2]
+                    RT_List_2 = [Origin_RT_List_2[x] for x in Peak_Top_2]
+                    RT_L_2 = [Origin_RT_List_2[x] for x in Peak_Begin_2]
+                    RT_R_2 = [Origin_RT_List_2[x] for x in Peak_End_2]
+                    All_Peak_Begin_2 = All_Peak_Begin_2 + Peak_Begin_2
+                    All_Peak_End_2 = All_Peak_End_2 + Peak_End_2
+                    All_Peak_Top_2 = All_Peak_Top_2 + Peak_Top_2
+                    All_Area_List_2 = All_Area_List_2 + Area_List_2
+                    All_Int_List_2 = All_Int_List_2 + Int_List_2
+                    All_RT_List_2 = All_RT_List_2 + RT_List_2
+                    All_RT_L_2 = All_RT_L_2 + RT_L_2
+                    All_RT_R_2 = All_RT_R_2 + RT_R_2
+                Peak_Begin_2 = All_Peak_Begin_2
+                Peak_End_2 = All_Peak_End_2
+                Peak_Top_2 = All_Peak_Top_2
+                Area_List_2 = All_Area_List_2
+                Int_List_2 = All_Int_List_2
+                RT_List_2 = All_RT_List_2
+                RT_L_2 = All_RT_L_2
+                RT_R_2 = All_RT_R_2
+                Score_matrix= np.zeros([len(RT_List_1),len(RT_List_2)])
+                for i_1 in range(len(RT_List_1)):
+                    for i_2 in range(len(RT_List_2)):
+                        if abs(RT_List_1[i_1]-RT_List_2[i_2])<self.get_param('Target_RT_Tor'):
+                            Score_matrix[i_1,i_2] = 1-abs(RT_List_1[i_1]-RT_List_2[i_2])/self.get_param('Target_RT_Tor')
+                Sm_1,Sm_2 = linear_sum_assignment(Score_matrix,True)
+                Sm_Filter = [(x,y) for x,y in zip(Sm_1,Sm_2) if Score_matrix[x,y]>0]
+                
+                Score_matrix= np.zeros([len(Sm_Filter),len(self.TargetList_set.loc[i,'RT'])])
+                for i_1 in range(len(Sm_Filter)):
+                    for i_2 in range(len(self.TargetList_set.loc[i,'RT'])):
+                        if abs(RT_List_1[Sm_Filter[i_1][0]]-self.TargetList_set.loc[i,'RT'][i_2]*60)< self.get_param('Target_RT_Tor') and abs(RT_List_2[Sm_Filter[i_1][1]]-self.TargetList_set.loc[i,'RT'][i_2]*60)< self.get_param('Target_RT_Tor') and Peak_End_1[Sm_Filter[i_1][0]]-Peak_Begin_1[Sm_Filter[i_1][0]] >= self.get_param('Points')-1:
+                            Score_matrix[i_1,i_2] = 0.3*(2-abs(RT_List_1[Sm_Filter[i_1][0]]-self.TargetList_set.loc[i,'RT'][i_2]*60)/ self.get_param('Target_RT_Tor') - abs(RT_List_2[Sm_Filter[i_1][1]]-self.TargetList_set.loc[i,'RT'][i_2]*60)/ self.get_param('Target_RT_Tor')) + 0.25*(Int_List_1[Sm_Filter[i_1][0]]/max(Int_List_1) + Int_List_2[Sm_Filter[i_1][1]]/max(Int_List_2))
+                Sm_1,Sm_2 = linear_sum_assignment(Score_matrix,True)         
+                Sm_Assign = [(x,y) for x,y in zip(Sm_1,Sm_2) if Score_matrix[x,y]>0]
+                for i_1,i_2 in Sm_Assign:
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_1/IS'] = 'None'
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'IS_Area'] = 'None'
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'RT_1'] = np.around(RT_List_1[Sm_Filter[i_1][0]]/60,3)
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_1'] = int(Area_List_1[Sm_Filter[i_1][0]])
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Hight_1'] = int(Int_List_1[Sm_Filter[i_1][0]])
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Noise_1'] = int(Noise_1)
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_left_1'] = np.around(RT_L_1[Sm_Filter[i_1][0]]/60,4)
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_right_1'] = np.around(RT_R_1[Sm_Filter[i_1][0]]/60,4)
+                    self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_RT_1'] = Plot_RT_1[Sm_Filter[i_1][0]]
+                    self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_Int_1'] = Plot_Int_1[Sm_Filter[i_1][0]]
+                    self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_RT_All_1'] = Origin_RT_List_1
+                    self.TargetList.at[self.TargetList_set.at[i,'TL_Index'][i_2],'Plot_Int_All_1'] = Origin_Int_List_1
+                    if pd.notna(self.TargetList_set.loc[i,'2_Q1']):
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'RT_2'] = np.around(RT_List_2[Sm_Filter[i_1][1]]/60,3)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_2'] = int(Area_List_2[Sm_Filter[i_1][1]])
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Area_2/IS'] = 'None'
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Hight_2'] = int(Int_List_2[Sm_Filter[i_1][1]])
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Noise_2'] = int(Noise_2)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_left_2'] = np.around(RT_L_2[Sm_Filter[i_1][1]]/60,4)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Edge_right_2'] = np.around(RT_R_2[Sm_Filter[i_1][1]]/60,4)
+                    x_1=list(MRM_1.loc[:,'RTList']/60)[0][Peak_Begin_1[Sm_Filter[i_1][0]]:Peak_End_1[Sm_Filter[i_1][0]]+1]
+                    y_1=list(MRM_1.loc[:,'Int'])[0][Peak_Begin_1[Sm_Filter[i_1][0]]:Peak_End_1[Sm_Filter[i_1][0]]+1]
+                    x_2=list(MRM_2.loc[:,'RTList']/60)[0][Peak_Begin_2[Sm_Filter[i_1][1]]:Peak_End_2[Sm_Filter[i_1][1]]+1]
+                    y_2=list(MRM_2.loc[:,'Int'])[0][Peak_Begin_2[Sm_Filter[i_1][1]]:Peak_End_2[Sm_Filter[i_1][1]]+1]
+                    y_1 = [y_1[x] for x in range(len(x_1)) if x_1[x] in x_2]
+                    y_2 = [y_2[x] for x in range(len(x_2)) if x_2[x] in x_1]
+                    self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][i_2],'Similarity'] = np.around(MRMProcess.CosineSimilarity(y_1, y_2, LOG=False),3)
+        
     def detect_Blank(self,FilePath=''):
         def integral(x,y):
             x_diff = list(np.diff(x))
             y_mix = [0.5*(y[x]+y[x+1]) for x in range(len(y)-1)]
             return sum([x_diff[x]*y_mix[x] for x in range(len(x_diff))])
+        def generate_and_merge_intervals(elements, x):
+            counts = [1]*len(elements)
+            # 1. 生成初始区间
+            intervals = []
+            for element, count in zip(elements, counts):
+                center = element
+                intervals.append((center - x, center + x, count))
+            
+            # 2. 按区间起始点排序
+            intervals.sort(key=lambda interval: interval[0])
+            
+            # 3. 合并重叠区间
+            merged_intervals = []
+            element_counts = []
+            
+            for interval in intervals:
+                start, end, count = interval
+                
+                # 如果是第一个区间，直接添加
+                if not merged_intervals:
+                    merged_intervals.append((start, end))
+                    element_counts.append(count)
+                else:
+                    # 检查当前区间是否与最后一个合并区间重叠
+                    last_start, last_end = merged_intervals[-1]
+                    
+                    # 判断是否重叠：当前区间的起始点 <= 上一个区间的结束点
+                    if start <= last_end:
+                        # 合并区间，取更大的结束点
+                        merged_intervals[-1] = (last_start, max(last_end, end))
+                        # 合并计数
+                        element_counts[-1] += count
+                    else:
+                        # 不重叠，添加新区间
+                        merged_intervals.append((start, end))
+                        element_counts.append(count)
+            
+            return merged_intervals, element_counts
         self.TargetList['IS_Area'] = ''
         self.TargetList['RT_1'] = ''
         self.TargetList['Area_1'] = ''
@@ -1768,6 +2851,8 @@ class MRMProcess(object):
                                 Origin_RT_List_2.insert(bisect.bisect_left(Origin_RT_List_2,MRM_2.loc[i_MRM,'RTList'][ii_MRM]), MRM_2.loc[i_MRM,'RTList'][ii_MRM])
                             else:
                                 Origin_Int_List_2[np.where(Origin_RT_List_2==MRM_2.loc[i_MRM,'RTList'][ii_MRM])[0][0]] = max(MRM_2.loc[i_MRM,'Int'][ii_MRM],Origin_Int_List_2[np.where(Origin_RT_List_2==MRM_2.loc[i_MRM,'RTList'][ii_MRM])[0][0]])
+                Noise_1 = self.Calculate_Noise(Origin_RT_List_1,Origin_Int_List_1)
+                Baseline_1 = MRMProcess.calc_global_baseline_with_mask_index(Origin_RT_List_1,Origin_Int_List_1,[],[],Noise_1,q=0.20,thr_k=4.0,pad_s=1.5,pad_points=None,min_nonpeak_frac=0.05,max_iter=3,drop_zeros=True)
                 if len(FilePath)>0:
                     fig_1 = go.Figure()
                     fig_1.add_trace(
@@ -1785,7 +2870,7 @@ class MRMProcess(object):
                         self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Area_1']=0
                         self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Area_1/IS']=0
                     else:
-                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Area_1']=integral(Blank_RT,Blank_Int)
+                        self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Area_1']=max(0,integral(Blank_RT,Blank_Int)-0.5*(min(Blank_Int[0],Baseline_1)+min(Blank_Int[-1],Baseline_1))*(Blank_RT[-1]-Blank_RT[0]))
                         IS_Area = list(self.Calibrant[self.Calibrant['Identity keys']==self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'IS']]['Area_1'])
                         if len(IS_Area)>0:
                             IS_Area = list(self.Calibrant[self.Calibrant['Identity keys']==self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'IS']]['Area_1'])[0]
@@ -1793,60 +2878,61 @@ class MRMProcess(object):
                         else:
                             self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Area_1/IS'] = ''
                         self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Hight_1'] = max(Blank_Int)
-                    fig_1.add_trace(
-                        go.Scatter(
-                            x=[x/60 for x in Blank_RT],
-                            y=Blank_Int,
-                            mode='lines',
-                            name=self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Identity keys'],
-                            line={'width':1},
-                            fill='tozeroy',
-                            ))
-                fig_1.update_layout(
-                    width=600,
-                    height=500,
-                    titlefont={'size':10},
-                    title='Q1:'+str(self.TargetList_set.loc[i,'1_Q1'])+' Q3:'+str(self.TargetList_set.loc[i,'1_Q3']),
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    xaxis={'title':{'font':{'size':10},'standoff':0},
-                           'linecolor':'black',
-                           'tickfont':{'size':10,'color':'black'},
-                           'ticks':'outside',
-                           'ticklen':2,
-                           'tickformat':'0.01f', # 统一小数点
-                           },
-                    yaxis={'title':{'font':{'size':10},'standoff':0},
-                           'linecolor':'black',
-                           'tickfont':{'size':10,'color':'black'},
-                           #'dtick':10000,
-                           'ticks':'outside',
-                           'ticklen':2,
-                           #'range':(0,20001),
-                           'exponentformat':'e', # 科学记数法
-                           'tickformat':'0.01E', # 统一小数点
-                           },
-                    legend_title_text='Gradeint :',
-                    legend_traceorder='reversed',
-                    legend={
-                        'font': {'size':10},
-                        'orientation':'v',  # 改为垂直方向
-                        'yanchor':'top',    # 锚点改为顶部
-                        'y':1,             # 顶部对齐
-                        'xanchor':'left',   # 左侧对齐
-                        'x':1.02,          # 放在图表右侧外部
-                        'bgcolor':'rgba(0,0,0,0)',
-                        #'bordercolor':'black',
-                        'borderwidth':0,
-                        'itemwidth':30,     # 图例项宽度
-                    },
-                    )
-                fig_1.layout.font.family = 'Helvetica'
-                fig_1.update_layout(showlegend=True)
-                fig_1.update_xaxes(hoverformat='.2f')
-                fig_1.write_html(FilePath+'/'+'Q1-'+str(np.around(self.TargetList_set.loc[i,'1_Q1'],1))+' Q3-'+str(np.around(self.TargetList_set.loc[i,'1_Q3'],1))+'.html',config={'responsive': False})
+                    if len(FilePath)>0:
+                        fig_1.add_trace(
+                            go.Scatter(
+                                x=[x/60 for x in Blank_RT],
+                                y=Blank_Int,
+                                mode='lines',
+                                name=self.TargetList.loc[self.TargetList_set.loc[i,'TL_Index'][ii],'Identity keys'],
+                                line={'width':1},
+                                fill='tozeroy',
+                                ))
+                if len(FilePath)>0:
+                    fig_1.update_layout(
+                        width=600,
+                        height=500,
+                        titlefont={'size':10},
+                        title='Q1:'+str(self.TargetList_set.loc[i,'1_Q1'])+' Q3:'+str(self.TargetList_set.loc[i,'1_Q3']),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        xaxis={'title':{'font':{'size':10},'standoff':0},
+                               'linecolor':'black',
+                               'tickfont':{'size':10,'color':'black'},
+                               'ticks':'outside',
+                               'ticklen':2,
+                               'tickformat':'0.01f', # 统一小数点
+                               },
+                        yaxis={'title':{'font':{'size':10},'standoff':0},
+                               'linecolor':'black',
+                               'tickfont':{'size':10,'color':'black'},
+                               #'dtick':10000,
+                               'ticks':'outside',
+                               'ticklen':2,
+                               #'range':(0,20001),
+                               'exponentformat':'e', # 科学记数法
+                               'tickformat':'0.01E', # 统一小数点
+                               },
+                        legend_title_text='Gradeint :',
+                        legend_traceorder='reversed',
+                        legend={
+                            'font': {'size':10},
+                            'orientation':'v',  # 改为垂直方向
+                            'yanchor':'top',    # 锚点改为顶部
+                            'y':1,             # 顶部对齐
+                            'xanchor':'left',   # 左侧对齐
+                            'x':1.02,          # 放在图表右侧外部
+                            'bgcolor':'rgba(0,0,0,0)',
+                            #'bordercolor':'black',
+                            'borderwidth':0,
+                            'itemwidth':30,     # 图例项宽度
+                        },
+                        )
+                    fig_1.layout.font.family = 'Helvetica'
+                    fig_1.update_layout(showlegend=True)
+                    fig_1.update_xaxes(hoverformat='.2f')
+                    fig_1.write_html(FilePath+'/'+'Q1-'+str(np.around(self.TargetList_set.loc[i,'1_Q1'],1))+' Q3-'+str(np.around(self.TargetList_set.loc[i,'1_Q3'],1))+'.html',config={'responsive': False})
         if len(FilePath)>0:
             self.TargetList.to_excel(FilePath+'/MRM-Results-'+str(time.localtime()[1])+str(time.localtime()[2])+str(time.localtime()[3])+str(time.localtime()[4])+'.xlsx',index=False)
-                
                     
     def add_0(x):
         x.append(0)
@@ -1887,10 +2973,20 @@ class MRMProcess(object):
         else:
             return self.__param[key]
     def TFFD(x, Auto_Int_List, Auto_RT_List):
-        FirstDerivative = (Auto_Int_List[x+1]*8+Auto_Int_List[x-2]-Auto_Int_List[x-1] * 8-Auto_Int_List[x+2])/((Auto_RT_List[x+2]-Auto_RT_List[x-2])*3)
+        if 2<= x <= len(Auto_Int_List)-3:
+            FirstDerivative = (Auto_Int_List[x+1]*8+Auto_Int_List[x-2]-Auto_Int_List[x-1] * 8-Auto_Int_List[x+2])/((Auto_RT_List[x+2]-Auto_RT_List[x-2])*3)
+        elif x < 2:
+            FirstDerivative = (Auto_Int_List[x]*(-3)+Auto_Int_List[x+1]*4+Auto_Int_List[x+2])/((Auto_RT_List[x+2]-Auto_RT_List[x])*3)
+        elif x > len(Auto_Int_List)-3:
+            FirstDerivative = (Auto_Int_List[x]*(3)-4*Auto_Int_List[x-1]-Auto_Int_List[x-2])/((Auto_RT_List[x]-Auto_RT_List[x-2])*3)
         return FirstDerivative
     def TFSD(x, Auto_Int_List, Auto_RT_List):
-        SecondDerivative = (Auto_Int_List[x+1]*16+Auto_Int_List[x-1]*16-Auto_Int_List[x] * 30-Auto_Int_List[x+2]-Auto_Int_List[x-2])/((Auto_RT_List[x+2]-Auto_RT_List[x-2])*3)
+        if 2<= x <= len(Auto_Int_List)-3:
+            SecondDerivative = (Auto_Int_List[x+1]*16+Auto_Int_List[x-1]*16-Auto_Int_List[x] * 30-Auto_Int_List[x+2]-Auto_Int_List[x-2])/((Auto_RT_List[x+2]-Auto_RT_List[x-2])*3)
+        elif x < 2:
+            SecondDerivative = (Auto_Int_List[x]-Auto_Int_List[x+1]+Auto_Int_List[x+2])/((Auto_RT_List[x+2]-Auto_RT_List[x])*3)
+        elif x > len(Auto_Int_List)-3:
+            SecondDerivative = (Auto_Int_List[x]-Auto_Int_List[x-1]+Auto_Int_List[x-2])/((Auto_RT_List[x]-Auto_RT_List[x-2])*3)
         return SecondDerivative
     def FD_Line(ABS_FD_List):
         ABS_FD_List = list(filter(lambda x: x < max(ABS_FD_List)*0.20 and x > 0, ABS_FD_List))
@@ -2019,7 +3115,6 @@ class MRMProcess(object):
             return list_a[Change_Place]
         else:
             return np.array([])
-
  
 
 
