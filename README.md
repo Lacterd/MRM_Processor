@@ -4,8 +4,8 @@
 
 This repository contains two main modules:
 
-- **MRM Processor GUI**: used for sample data processing
-- **MRM Curve**: used for calibration curve construction
+- **MRM_Processor_GUI**: used for sample data processing
+- **MRM_Processor_Curve**: used for calibration curve construction
 
 ---
 
