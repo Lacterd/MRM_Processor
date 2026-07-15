@@ -114,8 +114,7 @@ All output files will be saved in the folder containing the mzML files, includin
 
 - MRM_Data = MRMProcess('*.mzML')
 - MRM_Data.load_TargetList(TargetPath='*.xlsx',FilePath='*')
-- MRM_Data.detect_Peak_MRM('*')
-- MRM_Data.TargetList.to_excel('*')
+- MRM_Data.detect_Peak_MRM(FilePath='*')
 
 ---
 
